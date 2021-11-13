@@ -394,7 +394,7 @@ impl Main {
                                     );
                                 }
                                 Some(set) => {
-                                    let mut list = "<b>Список тем:<b>".to_string();
+                                    let mut list = "<b>Список тем:</b>".to_string();
                                     for (i, topic) in set.topics.iter().enumerate() {
                                         list +=
                                             format!("\n<b>{}.</b> {}", i + 1, topic.name).as_str();
