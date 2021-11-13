@@ -488,10 +488,6 @@ impl Main {
         match message.kind {
             MessageKind::Text { data, .. } => {
                 let chat_id = message.chat.id();
-                if self.shutting_down {
-                    self.send_shutting_down(chat_id);
-                    return;
-                }
                 let text = data.trim();
                 if text.is_empty() {
                     return;
@@ -538,22 +534,30 @@ impl Main {
                             Например, если вы не успели на вопрос за 50 нажать \"Да\", то следует исправить 100 очков командой: Исправить 100\n\
                             В случае необходимости вычесть очки, просто поставьте минус перед параметром: Исправить -100".to_string());
                     }
-                    "game" | "игра" => match game_data {
-                        None => {
-                            let mut game_data = GameData::new(
-                                self.timeout_sender.clone(),
-                                chat_id,
-                                self.data.clone(),
-                            );
-                            self.scheduler_bot
-                                .try_send_message(chat_id, game_data.to_string());
-                            self.game_proposals.insert(chat_id, game_data);
+                    "game" | "игра" => {
+                        if self.shutting_down {
+                            self.send_shutting_down(chat_id);
+                            return;
                         }
-                        Some(_) => {
-                            self.scheduler_bot
-                                .try_send_message(chat_id, "Существует активная игра".to_string());
+                        match game_data {
+                            None => {
+                                let mut game_data = GameData::new(
+                                    self.timeout_sender.clone(),
+                                    chat_id,
+                                    self.data.clone(),
+                                );
+                                self.scheduler_bot
+                                    .try_send_message(chat_id, game_data.to_string());
+                                self.game_proposals.insert(chat_id, game_data);
+                            }
+                            Some(_) => {
+                                self.scheduler_bot.try_send_message(
+                                    chat_id,
+                                    "Существует активная игра".to_string(),
+                                );
+                            }
                         }
-                    },
+                    }
                     "set" | "пакет" => match game_data {
                         None => {
                             self.scheduler_bot
@@ -689,6 +693,10 @@ impl Main {
                         }
                     },
                     "register" | "+" => {
+                        if self.shutting_down {
+                            self.send_shutting_down(chat_id);
+                            return;
+                        }
                         let game_data = match game_data {
                             None => {
                                 let game_data = GameData::new(
@@ -713,19 +721,27 @@ impl Main {
                                 .try_send_message(chat_id, game_data.to_string());
                         }
                     }
-                    "spectator" | "зритель" => match game_data {
-                        None => {
-                            self.scheduler_bot
-                                .try_send_message(chat_id, "Игра не начата".to_string());
+                    "spectator" | "зритель" => {
+                        if self.shutting_down {
+                            self.send_shutting_down(chat_id);
+                            return;
                         }
-                        Some(_) => {
-                            let game_data = self.game_proposals.get_mut(&chat_id).unwrap();
-                            game_data
-                                .add_spectator(user_id, self.data.get_or_create_user(message.from));
-                            self.scheduler_bot
-                                .try_send_message(chat_id, game_data.to_string());
+                        match game_data {
+                            None => {
+                                self.scheduler_bot
+                                    .try_send_message(chat_id, "Игра не начата".to_string());
+                            }
+                            Some(_) => {
+                                let game_data = self.game_proposals.get_mut(&chat_id).unwrap();
+                                game_data.add_spectator(
+                                    user_id,
+                                    self.data.get_or_create_user(message.from),
+                                );
+                                self.scheduler_bot
+                                    .try_send_message(chat_id, game_data.to_string());
+                            }
                         }
-                    },
+                    }
                     "unregister" | "-" => match game_data {
                         None => {
                             self.scheduler_bot
@@ -749,23 +765,31 @@ impl Main {
                                 .try_send_message(chat_id, "Игра отменена".to_string());
                         }
                     },
-                    "start" | "старт" => match game_data {
-                        None => {
-                            self.scheduler_bot
-                                .try_send_message(chat_id, "Игра не начата".to_string());
+                    "start" | "старт" => {
+                        if self.shutting_down {
+                            self.send_shutting_down(chat_id);
+                            return;
                         }
-                        Some(game_data) => {
-                            assert!((game_data.players.len() as u8) <= game_data.max_players);
-                            if (game_data.players.len() as u8) < game_data.min_players {
+                        match game_data {
+                            None => {
                                 self.scheduler_bot
-                                    .try_send_message(chat_id, "Недостаточно игроков".to_string());
-                            } else {
-                                let game_start_data = game_data.to_data();
-                                self.try_start_game(game_start_data).await;
-                                self.game_proposals.remove(&chat_id);
+                                    .try_send_message(chat_id, "Игра не начата".to_string());
+                            }
+                            Some(game_data) => {
+                                assert!((game_data.players.len() as u8) <= game_data.max_players);
+                                if (game_data.players.len() as u8) < game_data.min_players {
+                                    self.scheduler_bot.try_send_message(
+                                        chat_id,
+                                        "Недостаточно игроков".to_string(),
+                                    );
+                                } else {
+                                    let game_start_data = game_data.to_data();
+                                    self.try_start_game(game_start_data).await;
+                                    self.game_proposals.remove(&chat_id);
+                                }
                             }
                         }
-                    },
+                    }
                     "list" | "список" => {
                         let list = self.data.get_active_set_ids();
                         let mut message = "<b>Список пакетов:</b>\n".to_string();
