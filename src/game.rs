@@ -233,16 +233,21 @@ impl GameHandle {
             answers.push(current);
             self.game.game_state = GameState::Question(message_id, answers);
             self.edit_message(&message_id).await;
-            self.send_message(format!(
-                "{}, {}",
-                if timeout {
-                    "Время вышло"
-                } else {
-                    "Это неправильный ответ"
-                },
-                self.user_name(&current),
-            ))
-            .await;
+            self.play_bot
+                .send_message(
+                    ChatId::new(self.game.chat_id),
+                    format!(
+                        "{}, {}",
+                        if timeout {
+                            "Время вышло"
+                        } else {
+                            "Это неправильный ответ"
+                        },
+                        self.user_name(&current),
+                    ),
+                    KeyboardOptions::Plus,
+                )
+                .await;
             if restart_timer {
                 self.schedule_timeout(Self::SUCCESSIVE_THINKING);
             } else {
