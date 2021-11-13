@@ -495,7 +495,8 @@ impl Main {
                 }
                 let user_id = message.from.id;
                 let tokens = text.split(" ").collect::<Vec<_>>();
-                let mut command = tokens[0];
+                let command_str = tokens[0].to_lowercase();
+                let mut command = command_str.as_str();
                 if let Some(pos) = command.find("@") {
                     command = &command[0..pos];
                 }
