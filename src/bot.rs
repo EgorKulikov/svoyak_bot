@@ -146,18 +146,28 @@ impl TelegramBot {
     ) -> Option<MessageId> {
         let text = text.as_str().chars().collect::<Vec<_>>();
         if text.len() > Self::MAX_LEN {
+            let mut at = Self::MAX_LEN;
+            while text[at - 1] != '\n' {
+                at -= 1;
+                if at == 1usize {
+                    at = Self::MAX_LEN;
+                    break;
+                }
+            }
             self.send_message(
                 chat_id,
-                text[..Self::MAX_LEN].iter().cloned().collect::<String>(),
+                text[..at].iter().cloned().collect::<String>(),
                 keyboard_options,
             )
             .await;
-            self.send_message(
-                chat_id,
-                text[Self::MAX_LEN..].iter().cloned().collect::<String>(),
-                keyboard_options,
-            )
-            .await;
+            if at + 1 != text.len() {
+                self.send_message(
+                    chat_id,
+                    text[at..].iter().cloned().collect::<String>(),
+                    keyboard_options,
+                )
+                .await;
+            }
             return None;
         }
         let text = text.iter().cloned().collect::<String>();
@@ -181,18 +191,25 @@ impl TelegramBot {
         let message = message.as_str().chars().collect::<Vec<_>>();
         let bot = self.clone();
         tokio::spawn(async move {
-            for i in (0..message.len()).step_by(Self::MAX_LEN) {
+            let mut from = 0usize;
+            while from < message.len() {
+                let mut to = message.len().min(from + Self::MAX_LEN);
+                while to != message.len() && message[to - 1] != '\n' {
+                    to -= 1;
+                    if to == from + 1 {
+                        to = from + Self::MAX_LEN;
+                        break;
+                    }
+                }
                 for _ in 0..Self::TRIES {
                     let mut msg = SendMessage::new(
                         chat_id,
-                        message[i..(i + Self::MAX_LEN).min(message.len())]
-                            .iter()
-                            .cloned()
-                            .collect::<String>(),
+                        message[from..to].iter().cloned().collect::<String>(),
                     );
                     msg.parse_mode(ParseMode::Html);
                     match bot.api.send(msg).await {
                         Ok(_) => {
+                            from = to;
                             break;
                         }
                         Err(err) => {

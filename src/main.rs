@@ -786,6 +786,10 @@ impl Main {
                                     );
                                 } else {
                                     let game_start_data = game_data.to_data();
+                                    self.game_proposals
+                                        .get_mut(&chat_id)
+                                        .unwrap()
+                                        .cancel_timer();
                                     self.try_start_game(game_start_data).await;
                                     self.game_proposals.remove(&chat_id);
                                 }
