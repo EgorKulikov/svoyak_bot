@@ -419,13 +419,18 @@ impl GameHandle {
                                         self.send_message("Некорректное число очков".to_string())
                                             .await;
                                     } else {
-                                        self.game.players.get_mut(from).unwrap().1 += by;
-                                        self.send_message(format!(
-                                            "Новое количество очков у {} - {}",
-                                            self.user_name(from),
-                                            self.game.players[from].1,
-                                        ))
-                                        .await;
+                                        match self.game.players.get_mut(from) {
+                                            None => {}
+                                            Some((_, mut score, _)) => {
+                                                score += by;
+                                                self.send_message(format!(
+                                                    "Новое количество очков у {} - {}",
+                                                    self.user_name(from),
+                                                    self.game.players[from].1,
+                                                ))
+                                                .await;
+                                            }
+                                        }
                                         self.update_status();
                                     }
                                 }
