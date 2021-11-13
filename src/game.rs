@@ -382,7 +382,8 @@ impl GameHandle {
                 if tokens.is_empty() {
                     return;
                 }
-                let mut command = tokens[0];
+                let command_str = tokens[0].to_lowercase();
+                let mut command = command_str.as_str();
                 if command.starts_with("/") {
                     command = &command[1..];
                 }
@@ -421,8 +422,8 @@ impl GameHandle {
                                     } else {
                                         match self.game.players.get_mut(from) {
                                             None => {}
-                                            Some((_, mut score, _)) => {
-                                                score += by;
+                                            Some(player_data) => {
+                                                player_data.1 += by;
                                                 self.send_message(format!(
                                                     "Новое количество очков у {} - {}",
                                                     self.user_name(from),
@@ -533,12 +534,15 @@ impl GameHandle {
                 if let GameState::BeforeGame(paused, _) = self.game.game_state {
                     for user in data {
                         let id = user.id.into();
-                        if self.game.players.contains_key(&id) {
-                            self.game.players.get_mut(&id).unwrap().2 = true;
-                        } else if !self.game.spectators.contains(&id) {
-                            self.play_bot
-                                .kick(ChatId::from(self.game.chat_id), user.id)
-                                .await;
+                        match self.game.players.get_mut(&id) {
+                            None => {
+                                if !self.game.spectators.contains(&id) {
+                                    self.play_bot
+                                        .kick(ChatId::from(self.game.chat_id), user.id)
+                                        .await;
+                                }
+                            }
+                            Some(player_data) => player_data.2 = true,
                         }
                     }
                     if !self
@@ -553,6 +557,17 @@ impl GameHandle {
                             self.schedule_timeout(Self::PRE_GAME);
                         } else {
                             self.schedule_timeout(Self::PAUSE);
+                        }
+                    }
+                } else {
+                    for user in data {
+                        let id = user.id.into();
+                        if !self.game.players.contains_key(&id)
+                            && !self.game.spectators.contains(&id)
+                        {
+                            self.play_bot
+                                .kick(ChatId::from(self.game.chat_id), user.id)
+                                .await;
                         }
                     }
                 }
