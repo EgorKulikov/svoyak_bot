@@ -6,13 +6,13 @@ use std::ops::Add;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use telegram_bot::JsonIdResponse;
-use telegram_bot::JsonRequestType;
 use telegram_bot::{
     Api, ChatId, ChatMemberStatus, ChatRef, Document, EditMessageText, GetChatMember, GetFile,
     HttpRequest, Integer, KeyboardButton, KickChatMember, Message, MessageId, MessageOrChannelPost,
     ParseMode, ReplyKeyboardMarkup, ReplyKeyboardRemove, ReplyMarkup, Request, RequestType,
     RequestUrl, ResponseType, SendMessage, ToChatRef, UpdateKind, User, UserId,
 };
+use telegram_bot::{JsonRequestType, ToMessageId};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::Instant;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -187,10 +187,54 @@ impl TelegramBot {
         }
     }
 
-    pub fn try_send_message(&self, chat_id: ChatId, message: String) {
+    fn new_message(chat_id: ChatId, message: String) -> SendMessage<'static> {
+        let mut message = SendMessage::new(chat_id, message);
+        message.parse_mode(ParseMode::Html);
+        message
+    }
+
+    pub async fn try_send_once(&self, chat_id: ChatId, message: String) -> Option<MessageId> {
         let message = message.as_str().chars().collect::<Vec<_>>();
+        if message.len() > Self::MAX_LEN {
+            None
+        } else {
+            match self
+                .api
+                .send(Self::new_message(
+                    chat_id,
+                    message.iter().cloned().collect(),
+                ))
+                .await
+            {
+                Ok(res) => Some(res.to_message_id()),
+                Err(err) => {
+                    log::error!("Try send once failed with error: {}", err);
+                    None
+                }
+            }
+        }
+    }
+
+    pub fn try_edit_message(&self, chat_id: ChatId, message_id: MessageId, message: String) {
         let bot = self.clone();
         tokio::spawn(async move {
+            match bot
+                .api
+                .send(Self::new_edit_message(chat_id, message_id, message))
+                .await
+            {
+                Ok(_) => {}
+                Err(err) => {
+                    log::error!("Try edit message failed with error: {}", err);
+                }
+            }
+        });
+    }
+
+    pub fn try_send_message(&self, chat_id: ChatId, message: String) {
+        let bot = self.clone();
+        tokio::spawn(async move {
+            let message = message.as_str().chars().collect::<Vec<_>>();
             let mut from = 0usize;
             while from < message.len() {
                 let mut to = message.len().min(from + Self::MAX_LEN);
@@ -202,12 +246,14 @@ impl TelegramBot {
                     }
                 }
                 for _ in 0..Self::TRIES {
-                    let mut msg = SendMessage::new(
-                        chat_id,
-                        message[from..to].iter().cloned().collect::<String>(),
-                    );
-                    msg.parse_mode(ParseMode::Html);
-                    match bot.api.send(msg).await {
+                    match bot
+                        .api
+                        .send(Self::new_message(
+                            chat_id,
+                            message[from..to].iter().cloned().collect(),
+                        ))
+                        .await
+                    {
                         Ok(_) => {
                             from = to;
                             break;
@@ -223,10 +269,19 @@ impl TelegramBot {
         });
     }
 
+    fn new_edit_message(
+        chat_id: ChatId,
+        message_id: MessageId,
+        message: String,
+    ) -> EditMessageText<'static> {
+        let mut edit = EditMessageText::new(chat_id, message_id, message);
+        edit.parse_mode(ParseMode::Html);
+        edit
+    }
+
     pub async fn edit_message(&self, chat_id: ChatId, message_id: MessageId, text: String) {
-        let mut edit_message_text = EditMessageText::new(chat_id, message_id, text.clone());
-        edit_message_text.parse_mode(ParseMode::Html);
-        self.send_request(edit_message_text).await;
+        self.send_request(Self::new_edit_message(chat_id, message_id, text))
+            .await;
     }
 
     pub async fn get_file(&self, document: Document) -> Option<(String, String)> {

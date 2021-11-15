@@ -13,6 +13,12 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use telegram_bot::{ChatId, User, UserId};
 
+pub enum UserBanResult {
+    Banned,
+    AlreadyInList,
+    SizeLimitReached,
+}
+
 #[derive(Clone)]
 pub struct Data {
     db: Db,
@@ -30,10 +36,14 @@ impl Data {
     const GAME_STATE_KEY: &'static str = "game-state";
     const GAME_CHATS_KEY: &'static str = "game-chats";
     const BLOCKED_SET_KEY: &'static str = "blocked_set";
+    const BAN_LIST_KEY: &'static str = "ban-list";
+    const LAST_PLAYED_KEY: &'static str = "last-played";
 
     const SIZE_SUFFIX: &'static str = "size";
 
     const START_RATING: u32 = 15000;
+    const MAX_BAN_LIST: usize = 50;
+    const STORE_PLAYED: usize = 10;
 
     pub fn new(db: &str) -> Self {
         let res = Data {
@@ -46,6 +56,71 @@ impl Data {
 
     pub fn wipe(&self) {
         self.db.clear().unwrap();
+    }
+
+    pub fn get_last_played(&self, user: UserId) -> Vec<UserId> {
+        self.get_list::<i64>(&format!("{}#{}", Self::LAST_PLAYED_KEY, user))
+            .iter()
+            .map(|id| UserId::new(*id))
+            .collect()
+    }
+
+    pub fn add_game(&self, users: &[UserId]) {
+        for user in users {
+            for other in users {
+                if *user != *other {
+                    self.add_played(user, other);
+                }
+            }
+        }
+    }
+
+    fn add_played(&self, user: &UserId, other: &UserId) {
+        let other = *other;
+        let key = format!("{}#{}", Self::LAST_PLAYED_KEY, user);
+        if self.remove_element::<i64>(&key, &other.into()) {
+            self.add_element::<i64>(&key, &other.into());
+        } else {
+            if self.list_size(&key) == Self::STORE_PLAYED {
+                self.remove_at::<i64>(&key, 0usize);
+            }
+            self.add_element::<i64>(&key, &other.into());
+        }
+    }
+
+    pub fn in_ban_list(&self, user: UserId, other: UserId) -> bool {
+        self.get_list::<i64>(&format!("{}#{}", Self::BAN_LIST_KEY, user))
+            .contains(&other.into())
+    }
+
+    pub fn add_to_ban_list(&self, user: UserId, other: UserId) -> UserBanResult {
+        if self.in_ban_list(user, other) {
+            UserBanResult::AlreadyInList
+        } else {
+            let key = format!("{}#{}", Self::BAN_LIST_KEY, user);
+            if self.list_size(&key) == Self::MAX_BAN_LIST {
+                UserBanResult::SizeLimitReached
+            } else {
+                self.add_element::<i64>(&key, &other.into());
+                UserBanResult::Banned
+            }
+        }
+    }
+
+    pub fn remove_from_ban_list(&self, user: UserId, other: UserId) -> bool {
+        if self.in_ban_list(user, other) {
+            self.remove_element::<i64>(&format!("{}#{}", Self::BAN_LIST_KEY, user), &other.into());
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_ban_list(&self, user: UserId) -> Vec<UserId> {
+        self.get_list::<i64>(&format!("{}#{}", Self::BAN_LIST_KEY, user))
+            .iter()
+            .map(|id| UserId::new(*id))
+            .collect()
     }
 
     pub fn is_set_blocked(&self, id: UserId, set: &String) -> bool {
@@ -77,7 +152,7 @@ impl Data {
     }
 
     pub fn update_player(&self, id: UserId, mut user_data: UserData) -> UserData {
-        if let Some(old_data) = self.get_user_data(id) {
+        if let Some(old_data) = self.get_user_data(&id) {
             user_data.rating = old_data.rating;
         }
         self.set_user_data(id, &user_data);
@@ -169,19 +244,19 @@ impl Data {
         );
     }
 
-    pub fn get_user_data(&self, id: UserId) -> Option<UserData> {
+    pub fn get_user_data(&self, id: &UserId) -> Option<UserData> {
         self.get(&format!("{}#{}", Self::USER_DATA_KEY, id))
     }
 
     pub fn get_or_create_user(&self, user: User) -> UserData {
-        let mut user_data = match self.get_user_data(user.id) {
+        let mut user_data = match self.get_user_data(&user.id) {
             None => UserData {
                 display_name: "".to_string(),
                 rating: Self::START_RATING,
             },
             Some(user_data) => user_data,
         };
-        user_data.display_name = display_name(user);
+        user_data.display_name = display_name(&user);
         user_data
     }
 
@@ -464,35 +539,39 @@ impl Data {
         key: &String,
         element: &T,
     ) -> bool {
-        let mut len = self
-            .get(&format!("{}#{}", key, Self::SIZE_SUFFIX))
-            .unwrap_or(0usize);
+        let len = self.list_size(key);
         for i in 0usize..len {
             if self.get::<T>(&format!("{}#{}", key, i)).unwrap() == *element {
-                len -= 1;
-                if i != len {
-                    self.transaction(|db| {
-                        let last = Self::get_tree::<T>(db, &format!("{}#{}", key, len)).unwrap();
-                        Self::insert_tree(db, &format!("{}#{}", key, i), &last)?;
-                        Self::remove_tree(db, &format!("{}#{}", key, len))?;
-                        Self::insert_tree(db, &format!("{}#{}", key, Self::SIZE_SUFFIX), &len)?;
-                        Ok(())
-                    })
-                } else {
-                    self.transaction(|db| {
-                        Self::remove_tree(db, &format!("{}#{}", key, len))?;
-                        Self::insert_tree(db, &format!("{}#{}", key, Self::SIZE_SUFFIX), &len)?;
-                        Ok(())
-                    })
-                }
+                self.remove_at::<T>(key, i);
                 return true;
             }
         }
         false
     }
+
+    fn remove_at<T: BorshSerialize + BorshDeserialize>(&self, key: &String, i: usize) {
+        let len = self.list_size(key) - 1;
+        self.transaction(|db| {
+            for j in i..len {
+                Self::insert_tree(
+                    db,
+                    &format!("{}#{}", key, j),
+                    &Self::get_tree::<T>(db, &format!("{}#{}", key, j + 1)).unwrap(),
+                )?;
+            }
+            Self::remove_tree(db, &format!("{}#{}", key, len))?;
+            Self::insert_tree(db, &format!("{}#{}", key, Self::SIZE_SUFFIX), &len)?;
+            Ok(())
+        });
+    }
+
+    fn list_size(&self, key: &String) -> usize {
+        self.get(&format!("{}#{}", key, Self::SIZE_SUFFIX))
+            .unwrap_or(0usize)
+    }
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Clone)]
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
 pub struct UserData {
     pub display_name: String,
     pub rating: u32,
@@ -538,9 +617,9 @@ pub fn display_rating(rating: u32) -> u32 {
     (rating + 5) / 10
 }
 
-pub fn display_name(user: User) -> String {
-    match user.last_name {
-        None => user.first_name,
+pub fn display_name(user: &User) -> String {
+    match &user.last_name {
+        None => user.first_name.clone(),
         Some(last_name) => format!("{} {}", user.first_name, last_name),
     }
 }

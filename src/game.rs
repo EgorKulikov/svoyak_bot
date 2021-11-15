@@ -12,7 +12,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-#[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq)]
+#[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Debug)]
 pub enum GameState {
     BeforeGame(bool, u8),
     BeforeTopic(bool),
@@ -91,7 +91,7 @@ impl GameState {
     }
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub struct Game {
     pub chat_id: i64,
     source_chats: Vec<i64>,
@@ -282,7 +282,7 @@ impl GameHandle {
                 .map(|(id, _)| {
                     (
                         *id,
-                        self.data.get_user_data(UserId::new(*id)).unwrap().rating,
+                        self.data.get_user_data(&UserId::new(*id)).unwrap().rating,
                     )
                 })
                 .collect::<HashMap<_, _>>();
@@ -296,7 +296,7 @@ impl GameHandle {
                 .map(|(id, _)| {
                     (
                         *id,
-                        self.data.get_user_data(UserId::new(*id)).unwrap().rating,
+                        self.data.get_user_data(&UserId::new(*id)).unwrap().rating,
                     )
                 })
                 .collect::<HashMap<_, _>>();
@@ -644,7 +644,7 @@ impl GameHandle {
                     if minutes > 1 {
                         self.game.game_state = GameState::BeforeGame(false, minutes - 1);
                         self.send_message(format!(
-                            "Некоторые игроки все еще не зашли в чат. Через {} минут{} игра начнется автоматически",
+                            "Некоторые игроки всё еще не зашли в чат. Через {} минут{} игра начнется автоматически",
                             minutes - 1,
                             if minutes == 2 { "у" } else { "ы" }
                         )).await;
