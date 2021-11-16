@@ -213,8 +213,8 @@ struct Main {
 impl Main {
     const DUMMY: i64 = 412313351i64;
     const MANAGER: i64 = 80788292i64;
-    const MAIN_CHAT: i64 = -741754684i64;
-    // const MAIN_CHAT: i64 = -1001053502877i64;
+    // const MAIN_CHAT: i64 = -741754684i64;
+    const MAIN_CHAT: i64 = -1001053502877i64;
 
     pub fn new() -> Self {
         let data = Data::new("svoyak.db");
@@ -1385,7 +1385,7 @@ impl Main {
     }
 
     fn start_game(&mut self, game: Game) {
-        log::info!("Игра начата: {:?}", game);
+        log::info!("Игра начата: {:#?}", game);
         let chat_id = game.chat_id;
         let set_id = game.set_id.clone();
         let handle = GameHandle::create_game(
