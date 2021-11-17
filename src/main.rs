@@ -1461,7 +1461,7 @@ async fn async_main() {
 
 fn main() {
     env_logger::Builder::new()
-        .filter(None, LevelFilter::Info)
+        .filter(None, LevelFilter::Warn)
         .format_timestamp_millis()
         .write_style(WriteStyle::Always)
         .init();
