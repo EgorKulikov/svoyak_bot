@@ -1,3 +1,4 @@
+use crate::{GROUP_BOT_COMMANDS, MANAGER_COMMANDS, PRIVATE_BOT_COMMANDS};
 use async_recursion::async_recursion;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -5,17 +6,81 @@ use std::collections::HashMap;
 use std::ops::Add;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use telegram_bot::JsonIdResponse;
 use telegram_bot::{
     Api, ChatId, ChatMemberStatus, ChatRef, Document, EditMessageText, GetChatMember, GetFile,
     HttpRequest, Integer, KeyboardButton, KickChatMember, Message, MessageId, MessageOrChannelPost,
     ParseMode, ReplyKeyboardMarkup, ReplyKeyboardRemove, ReplyMarkup, Request, RequestType,
     RequestUrl, ResponseType, SendMessage, ToChatRef, UpdateKind, User, UserId,
 };
+use telegram_bot::{JsonIdResponse, True};
 use telegram_bot::{JsonRequestType, ToMessageId};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::Instant;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize)]
+struct BotCommand {
+    command: String,
+    description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize)]
+struct BotCommandScope {
+    r#type: String,
+    chat_id: Option<ChatId>,
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize)]
+struct SetMyCommands {
+    commands: Vec<BotCommand>,
+    scope: BotCommandScope,
+}
+
+impl SetMyCommands {
+    pub fn new(commands: Vec<BotCommand>, scope: &str, chat_id: Option<ChatId>) -> Self {
+        Self {
+            commands,
+            scope: BotCommandScope {
+                r#type: scope.to_string(),
+                chat_id,
+            },
+        }
+    }
+}
+
+impl Request for SetMyCommands {
+    type Type = JsonRequestType<Self>;
+    type Response = JsonIdResponse<True>;
+
+    fn serialize(&self) -> Result<HttpRequest, telegram_bot::types::Error> {
+        <Self::Type as RequestType>::serialize(RequestUrl::method("setMyCommands"), self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize)]
+struct DeleteMyCommands {
+    scope: BotCommandScope,
+}
+
+impl DeleteMyCommands {
+    pub fn new(scope: &str, chat_id: Option<ChatId>) -> Self {
+        Self {
+            scope: BotCommandScope {
+                r#type: scope.to_string(),
+                chat_id,
+            },
+        }
+    }
+}
+
+impl Request for DeleteMyCommands {
+    type Type = JsonRequestType<Self>;
+    type Response = JsonIdResponse<True>;
+
+    fn serialize(&self) -> Result<HttpRequest, telegram_bot::types::Error> {
+        <Self::Type as RequestType>::serialize(RequestUrl::method("deleteMyCommands"), self)
+    }
+}
 
 #[derive(Deserialize)]
 struct ChatInviteLink {
@@ -359,6 +424,40 @@ impl TelegramBot {
             }
         }
         true
+    }
+
+    fn build_commands(commands: &[(&str, &str)]) -> Vec<BotCommand> {
+        commands
+            .iter()
+            .map(|(command, description)| BotCommand {
+                command: command.to_string(),
+                description: description.to_string(),
+            })
+            .collect()
+    }
+
+    //noinspection RsSelfConvention
+    pub async fn set_commands(&self, main_chat: ChatId, manager: ChatId) {
+        self.send_request(SetMyCommands::new(
+            Self::build_commands(&PRIVATE_BOT_COMMANDS),
+            "all_private_chats",
+            None,
+        ))
+        .await;
+        let mut manager_commands = Self::build_commands(&MANAGER_COMMANDS);
+        manager_commands.append(&mut Self::build_commands(&PRIVATE_BOT_COMMANDS));
+        self.send_request(SetMyCommands::new(manager_commands, "chat", Some(manager)))
+            .await;
+        self.send_request(SetMyCommands::new(
+            Self::build_commands(&GROUP_BOT_COMMANDS),
+            "all_group_chats",
+            None,
+        ))
+        .await;
+        self.send_request(DeleteMyCommands::new("chat", Some(main_chat)))
+            .await;
+        self.send_request(SetMyCommands::new(Vec::new(), "chat", Some(main_chat)))
+            .await;
     }
 
     async fn wait_for_slot(&self, chat_id: ChatId) {

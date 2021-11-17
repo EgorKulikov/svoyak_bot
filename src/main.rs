@@ -23,6 +23,65 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+pub const PRIVATE_BOT_COMMANDS: [(&'static str, &'static str); 12] = [
+    ("help", "выводит это сообщение"),
+    ("register", "добавляет в очередь на создание игры"),
+    ("unregister", "удаляет из очереди на создание игры"),
+    ("list", "выводит список пакетов"),
+    ("status", "выводит список идущих игр"),
+    ("rating", "выводит таблицу рейтинга"),
+    ("block", "блокирует пакет"),
+    (
+        "unblock",
+        "разблокирует пакет. Невозможно для пакетов, заблокированных в старой версии бота",
+    ),
+    (
+        "played",
+        "список игроков, с которыми вы играли в последнее время",
+    ),
+    ("banlist", "список игроков, которых вы заблокировали"),
+    (
+        "ban",
+        "заблокировать игрока по номеру в списке игроков, с которыми вы играли в последнее время",
+    ),
+    (
+        "unban",
+        "разблокировать игрока по номеру в списке игроков, которых вы заблокировали",
+    ),
+];
+
+pub const GROUP_BOT_COMMANDS: [(&'static str, &'static str); 16] = [
+    ("help", "выводит это сообщение"),
+    ("game", "создает новую игру"),
+    ("set", "задает пакет, на которм будет идти игра"),
+    ("topics", "устанавливает число тем"),
+    ("minplayers", "устанавливает минимальное число игроков"),
+    ("maxplayers", "устанавливает максимальное число игроков"),
+    (
+        "register",
+        "регистрирует на текущую игру и создает игру, если она не начата",
+    ),
+    ("spectator", "регистрирует на текущую игру зрителем"),
+    ("unregister", "отменяет регистрацию"),
+    ("start", "стартует текущую игру"),
+    ("abort", "отменяет текущую игру"),
+    ("list", "выводит список пакетов"),
+    ("status", "выводит список идущих игр"),
+    ("rating", "выводит таблицу рейтинга"),
+    ("block", "блокирует пакет"),
+    (
+        "unblock",
+        "разблокирует пакет. Невозможно для пакетов, заблокированных в старой версии бота",
+    ),
+];
+
+pub const MANAGER_COMMANDS: [(&'static str, &'static str); 4] = [
+    ("shutdown", "..."),
+    ("on", "..."),
+    ("off", "..."),
+    ("topics", "..."),
+];
+
 pub fn player_list(users: &[&UserData]) -> String {
     let mut res = String::new();
     for user in users {
@@ -251,6 +310,9 @@ impl Main {
     }
 
     pub async fn run(mut self) {
+        self.scheduler_bot
+            .set_commands(ChatId::new(Self::MAIN_CHAT), ChatId::new(Self::MANAGER))
+            .await;
         self.play_chats = self.data.get_game_chats().iter().map(|id| *id).collect();
         for game in self.data.get_game_states() {
             self.start_game(game);
@@ -344,13 +406,13 @@ impl Main {
                 }
                 let tokens = &tokens[1..];
                 match command {
-                    "выключение" => {
+                    "shutdown" | "выключение" => {
                         self.shutting_down = true;
                         self.send_shutting_down(ChatId::new(Self::MAIN_CHAT));
                         self.queue_sender.send(UpdateMessage::Shutdown).unwrap();
                         true
                     }
-                    "включить" => {
+                    "on" | "включить" => {
                         if tokens.is_empty() {
                             self.scheduler_bot
                                 .try_send_message(chat_id, "Пакет не указан".to_string());
@@ -380,7 +442,7 @@ impl Main {
                         }
                         true
                     }
-                    "выключить" => {
+                    "off" | "выключить" => {
                         if tokens.is_empty() {
                             self.scheduler_bot
                                 .try_send_message(chat_id, "Пакет не указан".to_string());
@@ -410,7 +472,7 @@ impl Main {
                         }
                         true
                     }
-                    "темы" => {
+                    "topics" | "темы" => {
                         if tokens.is_empty() {
                             self.scheduler_bot
                                 .try_send_message(chat_id, "Пакет не указан".to_string());
@@ -493,42 +555,28 @@ impl Main {
                 let tokens = &tokens[1..];
                 match command {
                     "help" | "помощь" | "start" => {
-                        self.scheduler_bot.try_send_message(user_id.into(), "Бот для спортивной своей игры. Команды:\n\
-                            /help - выводит это сообщение\n\
-                            /register - добавляет в очередь на создание игры\n\
-                            /unregister - удаляет из очереди на создание игры\n\
-                            /list - выводит список пакетов\n\
-                            /status - выводит список идущих игр\n\
-                            /rating - выводит таблицу рейтинга\n\
-                            /block - блокирует пакет\n\
-                            /unblock - разблокирует пакет. Невозможно для пакетов, заблокированных в старой версии бота.\n\
-                            /played - список игроков, с которыми вы играли в последнее время\n\
-                            /banlist - список игроков, которых вы заблокировали\n\
-                            /ban - заблокировать игрока по номеру в списке игроков, с которыми вы играли в последнее время\n\
-                            /unban - разблокировать игрока по номеру в списке игроков, которых вы заблокировали\n\
-                            \n\
-                            Во время игры:\n\
-                            \"+\" - Если вы хотите ответить на вопрос\n\
-                            \"Да\" - если вы хотите подтвердить правильность СОБСТВЕННОГО ответа, не зачтенного автоматически. Не жмите \"да\" на чужие ответы.\n\
-                            \"Нет\" - если вы по ошибке нажали \"Да\" и вам засчитали неправильный ответ.\n\
-                            \"Пауза\" - приостановить игру\n\
-                            \"Продолжить\" - продолжить игру.\n\
-                            В режиме паузы можно исправить неверно посчитанные очки. Для этого следует ввести команду \n\
-                            \"Исправить\" с параметром \"количество очков\"\n\
-                            Например, если вы не успели на вопрос за 50 нажать \"Да\", то следует исправить 100 очков командой: Исправить 100\n\
-                            В случае необходимости вычесть очки, просто поставьте минус перед параметром: Исправить -100".to_string());
+                        let help = Self::build_help(&PRIVATE_BOT_COMMANDS);
+                        self.scheduler_bot.try_send_message(user_id.into(), help);
                     }
                     "register" | "+" => {
-                        self.data
-                            .update_player(user_id, self.data.get_or_create_user(message.from));
-                        self.queue_sender
-                            .send(UpdateMessage::UserEntered(user_id))
-                            .unwrap();
+                        if self.shutting_down {
+                            self.send_shutting_down(user_id.into());
+                        } else {
+                            self.data
+                                .update_player(user_id, self.data.get_or_create_user(message.from));
+                            self.queue_sender
+                                .send(UpdateMessage::UserEntered(user_id))
+                                .unwrap();
+                        }
                     }
                     "unregister" | "-" => {
-                        self.queue_sender
-                            .send(UpdateMessage::UserLeft(user_id))
-                            .unwrap();
+                        if self.shutting_down {
+                            self.send_shutting_down(user_id.into());
+                        } else {
+                            self.queue_sender
+                                .send(UpdateMessage::UserLeft(user_id))
+                                .unwrap();
+                        }
                     }
                     "list" | "список" => {
                         self.set_list(user_id.into());
@@ -694,6 +742,25 @@ impl Main {
         }
     }
 
+    fn build_help(commands: &[(&str, &str)]) -> String {
+        let mut help = "Бот для спортивной своей игры. Команды:\n".to_string();
+        for (command, description) in commands {
+            help += format!("/{} - {}\n", command, description).as_str();
+        }
+        help += "\n\
+                Во время игры:\n\
+                \"+\" - Если вы хотите ответить на вопрос\n\
+                \"Да\" - если вы хотите подтвердить правильность СОБСТВЕННОГО ответа, не зачтенного автоматически. Не жмите \"да\" на чужие ответы.\n\
+                \"Нет\" - если вы по ошибке нажали \"Да\" и вам засчитали неправильный ответ.\n\
+                \"Пауза\" - приостановить игру\n\
+                \"Продолжить\" - продолжить игру.\n\
+                В режиме паузы можно исправить неверно посчитанные очки. Для этого следует ввести команду \n\
+                \"Исправить\" с параметром \"количество очков\"\n\
+                Например, если вы не успели на вопрос за 50 нажать \"Да\", то следует исправить 100 очков командой: Исправить 100\n\
+                В случае необходимости вычесть очки, просто поставьте минус перед параметром: Исправить -100";
+        help
+    }
+
     fn send_shutting_down(&self, chat_id: ChatId) {
         self.scheduler_bot.try_send_message(
             chat_id,
@@ -727,34 +794,8 @@ impl Main {
                 let game_data = self.game_proposals.get(&chat_id);
                 match command {
                     "help" | "помощь" => {
-                        self.scheduler_bot.try_send_message(chat_id, "Бот для спортивной своей игры. Команды:\n\
-                            /help - выводит это сообщение\n\
-                            /game - создает новую игру\n\
-                            /set - задает пакет, на которм будет идти игра\n\
-                            /topics - устанавливает число тем\n\
-                            /minplayers - устанавливает минимальное число игроков\n\
-                            /maxplayers - устанавливает максимальное число игроков\n\
-                            /register - регистрирует на текущую игру и создает игру, если она не начата\n\
-                            /spectator - регистрирует на текущую игру зрителем\n\
-                            /unregister - отменяет регистрацию\n\
-                            /start - стартует текущую игру\n\
-                            /abort - отменяет текущую игру\n\
-                            /list - выводит список пакетов\n\
-                            /status - выводит список идущих игр\n\
-                            /rating - выводит таблицу рейтинга\n\
-                            /block - блокирует пакет\n\
-                            /unblock - разблокирует пакет. Невозможно для пакетов, заблокированных в старой версии бота.\n\
-                            \n\
-                            Во время игры:\n\
-                            \"+\" - Если вы хотите ответить на вопрос\n\
-                            \"Да\" - если вы хотите подтвердить правильность СОБСТВЕННОГО ответа, не зачтенного автоматически. Не жмите \"да\" на чужие ответы.\n\
-                            \"Нет\" - если вы по ошибке нажали \"Да\" и вам засчитали неправильный ответ.\n\
-                            \"Пауза\" - приостановить игру\n\
-                            \"Продолжить\" - продолжить игру.\n\
-                            В режиме паузы можно исправить неверно посчитанные очки. Для этого следует ввести команду \n\
-                            \"Исправить\" с параметром \"количество очков\"\n\
-                            Например, если вы не успели на вопрос за 50 нажать \"Да\", то следует исправить 100 очков командой: Исправить 100\n\
-                            В случае необходимости вычесть очки, просто поставьте минус перед параметром: Исправить -100".to_string());
+                        self.scheduler_bot
+                            .try_send_message(chat_id, Self::build_help(&GROUP_BOT_COMMANDS));
                     }
                     "game" | "игра" => {
                         if self.shutting_down {

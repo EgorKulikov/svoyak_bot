@@ -24,12 +24,11 @@ struct QueueEntry {
     user_data: UserData,
     min_rating: i64,
     max_rating: i64,
-    will_play_with_three: bool,
+    force_add: bool,
 }
 
 struct GameFinder<'s> {
     players: &'s Vec<QueueEntry>,
-    num_players: usize,
     result: Vec<&'s QueueEntry>,
     data: Data,
 }
@@ -42,7 +41,6 @@ impl<'s> GameFinder<'s> {
     ) -> Option<(GameStartData, String, Vec<usize>)> {
         let mut game_finder = Self {
             players,
-            num_players,
             result: Vec::new(),
             data,
         };
@@ -50,10 +48,12 @@ impl<'s> GameFinder<'s> {
     }
 
     fn compatible(&self, one: &'s QueueEntry, another: &'s QueueEntry) -> bool {
-        one.max_rating >= another.user_data.rating as i64
-            && one.min_rating <= another.user_data.rating as i64
-            && another.max_rating >= one.user_data.rating as i64
-            && another.min_rating <= another.user_data.rating as i64
+        (one.force_add
+            || another.force_add
+            || one.max_rating >= another.user_data.rating as i64
+                && one.min_rating <= another.user_data.rating as i64
+                && another.max_rating >= one.user_data.rating as i64
+                && another.min_rating <= another.user_data.rating as i64)
             && !self.data.in_ban_list(one.user_id, another.user_id)
             && !self.data.in_ban_list(another.user_id, one.user_id)
     }
@@ -86,21 +86,19 @@ impl<'s> GameFinder<'s> {
                 None
             } else {
                 for next in (left_players - 1)..limit {
-                    if self.num_players == 4 || self.players[next].will_play_with_three {
-                        let mut good = true;
-                        for player in self.result.iter() {
-                            if !self.compatible(player, &self.players[next]) {
-                                good = false;
-                                break;
-                            }
+                    let mut good = true;
+                    for player in self.result.iter() {
+                        if !self.compatible(player, &self.players[next]) {
+                            good = false;
+                            break;
                         }
-                        if good {
-                            self.result.push(&self.players[next]);
-                            if let Some(res) = self.do_find_game(left_players - 1, next) {
-                                return Some(res);
-                            }
-                            self.result.pop();
+                    }
+                    if good {
+                        self.result.push(&self.players[next]);
+                        if let Some(res) = self.do_find_game(left_players - 1, next) {
+                            return Some(res);
                         }
+                        self.result.pop();
                     }
                 }
                 None
@@ -173,7 +171,7 @@ impl PlayQueue {
                     user_data,
                     min_rating,
                     max_rating,
-                    will_play_with_three: since_entered >= Duration::from_secs(60),
+                    force_add: since_entered >= Duration::from_secs(300),
                 }
             })
             .collect();
