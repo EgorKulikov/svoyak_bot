@@ -163,7 +163,7 @@ impl PlayQueue {
             .map(|(user_id, _, entered, _)| {
                 let since_entered = entered.elapsed();
                 let user_data = self.data.get_user_data(user_id).unwrap();
-                let delta = (since_entered.as_millis() / 100) as i64;
+                let delta = (since_entered.as_millis() / 100 + 50) as i64;
                 let min_rating = (user_data.rating as i64) - delta;
                 let max_rating = (user_data.rating as i64) + delta;
                 QueueEntry {
