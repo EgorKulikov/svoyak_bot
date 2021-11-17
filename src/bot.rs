@@ -179,7 +179,7 @@ impl TelegramBot {
         if let Some(reply_markup) = reply_markup {
             request.reply_markup(reply_markup);
         }
-        let message = self.send_request(request).await;
+        let message = self.send_request(request).await.unwrap();
         self.save_slot(chat_id);
         match message {
             MessageOrChannelPost::Message(message) => Some(message.id),
@@ -259,7 +259,14 @@ impl TelegramBot {
                             break;
                         }
                         Err(err) => {
-                            log::error!("Error sending optional message: {}", err);
+                            let error_message = format!("{}", err);
+                            if error_message.contains("Bad Request") {
+                                log::error!(
+                                    "Error sending optional message, won't retry: {}",
+                                    error_message
+                                );
+                            }
+                            log::error!("Error sending optional message: {}", error_message);
                             tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }
@@ -294,7 +301,7 @@ impl TelegramBot {
         {
             return None;
         }
-        let file = self.send_request(GetFile::new(doc.clone())).await;
+        let file = self.send_request(GetFile::new(doc.clone())).await.unwrap();
         let url = file.get_url(self.token.as_str());
         if url.is_none() {
             return None;
@@ -310,7 +317,8 @@ impl TelegramBot {
         self.block_slot(chat_id);
         let status = self
             .send_request(GetChatMember::new(chat_id, user_id))
-            .await;
+            .await
+            .unwrap();
         if status.status == ChatMemberStatus::Member {
             self.send_request(KickChatMember::new(chat_id, user_id))
                 .await;
@@ -332,6 +340,7 @@ impl TelegramBot {
         let res = self
             .send_request(CreateChatInviteLink::new(chat_id))
             .await
+            .unwrap()
             .invite_link;
         self.save_slot(chat_id);
         res
@@ -365,15 +374,20 @@ impl TelegramBot {
     async fn send_request<Req: Request + Clone>(
         &self,
         request: Req,
-    ) -> <<Req as Request>::Response as ResponseType>::Type {
+    ) -> Option<<<Req as Request>::Response as ResponseType>::Type> {
         for _ in 0..Self::TRIES {
             let result = self.api.send(request.clone()).await;
             match result {
                 Ok(result) => {
-                    return result;
+                    return Some(result);
                 }
                 Err(err) => {
-                    log::error!("Error sending message: {}", err);
+                    let error_message = format!("{}", err);
+                    if error_message.contains("Bad Request") {
+                        log::error!("Error sending message, won't retry: {}", error_message);
+                        return None;
+                    }
+                    log::error!("Error sending message: {}", error_message);
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
