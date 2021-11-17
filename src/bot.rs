@@ -380,11 +380,7 @@ impl TelegramBot {
     pub async fn kick(&self, chat_id: ChatId, user_id: UserId) {
         self.wait_for_slot(chat_id).await;
         self.block_slot(chat_id);
-        let status = self
-            .send_request(GetChatMember::new(chat_id, user_id))
-            .await
-            .unwrap();
-        if status.status == ChatMemberStatus::Member {
+        if self.is_chat_member(chat_id, user_id).await {
             self.send_request(KickChatMember::new(chat_id, user_id))
                 .await;
         }
@@ -411,15 +407,19 @@ impl TelegramBot {
         res
     }
 
+    async fn is_chat_member(&self, chat_id: ChatId, user_id: UserId) -> bool {
+        match self
+            .send_request(GetChatMember::new(chat_id, user_id))
+            .await
+        {
+            None => false,
+            Some(member) => member.status == ChatMemberStatus::Member,
+        }
+    }
+
     pub async fn all_players_in_chat(&self, chat_id: ChatId, users: Vec<UserId>) -> bool {
         for user_id in users {
-            if self
-                .send_request(GetChatMember::new(chat_id, user_id))
-                .await
-                .unwrap()
-                .status
-                != ChatMemberStatus::Member
-            {
+            if self.is_chat_member(chat_id, user_id).await {
                 return false;
             }
         }
