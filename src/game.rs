@@ -641,7 +641,19 @@ impl GameHandle {
         } else {
             match self.game.game_state.clone() {
                 GameState::BeforeGame(_, minutes) => {
-                    if minutes > 1 {
+                    if minutes > 1
+                        && !self
+                            .play_bot
+                            .all_players_in_chat(
+                                ChatId::new(self.game.chat_id),
+                                self.game
+                                    .players
+                                    .keys()
+                                    .map(|id| UserId::new(*id))
+                                    .collect::<Vec<_>>(),
+                            )
+                            .await
+                    {
                         self.game.game_state = GameState::BeforeGame(false, minutes - 1);
                         self.send_message(format!(
                             "Некоторые игроки всё еще не зашли в чат. Через {} минут{} игра начнется автоматически",

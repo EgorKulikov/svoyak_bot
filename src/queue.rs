@@ -99,6 +99,7 @@ impl<'s> GameFinder<'s> {
                             if let Some(res) = self.do_find_game(left_players - 1, next) {
                                 return Some(res);
                             }
+                            self.result.pop();
                         }
                     }
                 }

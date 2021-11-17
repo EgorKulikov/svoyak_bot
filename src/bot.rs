@@ -346,6 +346,21 @@ impl TelegramBot {
         res
     }
 
+    pub async fn all_players_in_chat(&self, chat_id: ChatId, users: Vec<UserId>) -> bool {
+        for user_id in users {
+            if self
+                .send_request(GetChatMember::new(chat_id, user_id))
+                .await
+                .unwrap()
+                .status
+                != ChatMemberStatus::Member
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     async fn wait_for_slot(&self, chat_id: ChatId) {
         let now = Instant::now();
         // let guard = ;

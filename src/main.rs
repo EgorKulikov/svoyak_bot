@@ -1190,6 +1190,7 @@ impl Main {
         topics: Vec<usize>,
         from_private: bool,
     ) {
+        log::info!("{:#?}", game_data);
         let chat_id = self
             .play_chats
             .iter()
@@ -1385,7 +1386,6 @@ impl Main {
     }
 
     fn start_game(&mut self, game: Game) {
-        log::info!("Игра начата: {:#?}", game);
         let chat_id = game.chat_id;
         let set_id = game.set_id.clone();
         let handle = GameHandle::create_game(
