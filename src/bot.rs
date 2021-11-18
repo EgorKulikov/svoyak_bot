@@ -3,6 +3,7 @@ use async_recursion::async_recursion;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::ops::Add;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -325,13 +326,20 @@ impl TelegramBot {
                         }
                         Err(err) => {
                             let error_message = format!("{}", err);
-                            if error_message.contains("Bad Request") {
+                            if error_message.contains("Bad Request")
+                                || error_message.contains("Forbidden")
+                            {
                                 log::error!(
-                                    "Error sending optional message, won't retry: {}",
-                                    error_message
+                                    "Error sending optional message, won't retry: {}, message: {}",
+                                    error_message,
+                                    message.iter().collect::<String>()
                                 );
                             }
-                            log::error!("Error sending optional message: {}", error_message);
+                            log::error!(
+                                "Error sending optional message: {}, message: {}",
+                                error_message,
+                                message.iter().collect::<String>()
+                            );
                             tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }
@@ -485,7 +493,7 @@ impl TelegramBot {
         guard.insert(chat_id, Instant::now().add(Duration::from_secs(100)));
     }
 
-    async fn send_request<Req: Request + Clone>(
+    async fn send_request<Req: Request + Clone + Debug>(
         &self,
         request: Req,
     ) -> Option<<<Req as Request>::Response as ResponseType>::Type> {
@@ -497,11 +505,20 @@ impl TelegramBot {
                 }
                 Err(err) => {
                     let error_message = format!("{}", err);
-                    if error_message.contains("Bad Request") {
-                        log::error!("Error sending message, won't retry: {}", error_message);
+                    if error_message.contains("Bad Request") || error_message.contains("Forbidden")
+                    {
+                        log::error!(
+                            "Error sending message, won't retry: {}, message: {:#?}",
+                            error_message,
+                            request
+                        );
                         return None;
                     }
-                    log::error!("Error sending message: {}", error_message);
+                    log::error!(
+                        "Error sending message: {}, message: {:#?}",
+                        error_message,
+                        request
+                    );
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
