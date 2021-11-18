@@ -669,8 +669,18 @@ impl GameHandle {
                                 format!("{}. {}\n", i + 1, self.topic_set.topics[*i].name).as_str();
                         }
                         self.send_message(format!(
-                            "Игра началась. {}\n{}\n{}\n\n",
-                            self.topic_set.title, self.topic_set.description, list
+                            "Игра началась. Игроки:\n{}\n\n{}\n{}\n{}\n\n",
+                            player_list(
+                                &self
+                                    .game
+                                    .players
+                                    .iter()
+                                    .map(|(_, (player, ..))| player)
+                                    .collect::<Vec<_>>()[..]
+                            ),
+                            self.topic_set.title,
+                            self.topic_set.description,
+                            list
                         ))
                         .await;
                         self.schedule_timeout(Self::INTERMISSION);
