@@ -1,11 +1,11 @@
 use crate::bot::TelegramBot;
 use crate::data::{Data, UserData};
-use crate::{find_topics, GameStartData};
+use crate::{find_topics, GameStartData, Main};
 use futures::stream::select_all;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use telegram_bot::{MessageId, UserId};
+use telegram_bot::{ChatId, MessageId, UserId};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -116,6 +116,7 @@ pub struct PlayQueue {
     update_stream: Option<UnboundedReceiverStream<UpdateMessage>>,
     find_sender: UnboundedSender<UpdateMessage>,
     find_stream: Option<UnboundedReceiverStream<UpdateMessage>>,
+    queue_message_id: MessageId,
 }
 
 impl PlayQueue {
@@ -123,6 +124,7 @@ impl PlayQueue {
         data: Data,
         scheduler_bot: TelegramBot,
         update_stream: UnboundedReceiverStream<UpdateMessage>,
+        queue_message_id: MessageId,
     ) -> (
         Self,
         UnboundedReceiverStream<(GameStartData, String, Vec<usize>)>,
@@ -139,6 +141,7 @@ impl PlayQueue {
                 update_stream: Some(update_stream),
                 find_sender,
                 find_stream: Some(UnboundedReceiverStream::new(find_receiver)),
+                queue_message_id,
             },
             UnboundedReceiverStream::new(game_receiver),
         )
@@ -202,6 +205,14 @@ impl PlayQueue {
                 Self::queue_message_text(self.queue.len()),
             );
         }
+        self.bot.try_edit_message(
+            ChatId::new(Main::MAIN_CHAT),
+            self.queue_message_id,
+            format!(
+                "Всего игроков в очереди <b>{}</b>\nДля игры пройдите в @SvoyakSchedulerBot",
+                self.queue.len()
+            ),
+        );
     }
 
     pub async fn start(&mut self) {

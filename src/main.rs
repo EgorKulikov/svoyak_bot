@@ -250,7 +250,7 @@ impl GameData {
     }
 }
 
-struct Main {
+pub struct Main {
     data: Data,
     scheduler_bot: TelegramBot,
     play_bot: TelegramBot,
@@ -272,10 +272,10 @@ struct Main {
 impl Main {
     const DUMMY: i64 = 412313351i64;
     const MANAGER: i64 = 80788292i64;
-    // const MAIN_CHAT: i64 = -741754684i64;
-    const MAIN_CHAT: i64 = -1001053502877i64;
+    pub const MAIN_CHAT: i64 = -741754684i64;
+    // pub const MAIN_CHAT: i64 = -1001053502877i64;
 
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         let data = Data::new("svoyak.db");
         let (scheduler_bot, scheduler_stream) =
             TelegramBot::new(env::var("SCHEDULER_BOT_TOKEN").unwrap());
@@ -283,10 +283,20 @@ impl Main {
         let (status_sender, status_receiver) = unbounded_channel();
         let (timeout_sender, timeout_receiver) = unbounded_channel();
         let (queue_sender, queue_receiver) = unbounded_channel();
+        let message_id = scheduler_bot
+            .send_message(
+                ChatId::new(Self::MAIN_CHAT),
+                "Всего игроков в очереди <b>0</b>\nДля игры пройдите в @SvoyakSchedulerBot"
+                    .to_string(),
+                KeyboardOptions::None,
+            )
+            .await
+            .unwrap();
         let (queue, queue_stream) = PlayQueue::new(
             data.clone(),
             scheduler_bot.clone(),
             UnboundedReceiverStream::new(queue_receiver),
+            message_id,
         );
 
         Self {
@@ -1496,7 +1506,7 @@ pub fn find_topics(data: &Data, game_data: &mut GameStartData) -> Option<(String
 }
 
 async fn async_main() {
-    let main = Main::new();
+    let main = Main::new().await;
     main.run().await;
 }
 
