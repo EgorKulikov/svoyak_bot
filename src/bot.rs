@@ -321,7 +321,6 @@ impl TelegramBot {
                         .await
                     {
                         Ok(_) => {
-                            from = to;
                             break;
                         }
                         Err(err) => {
@@ -334,6 +333,7 @@ impl TelegramBot {
                                     error_message,
                                     message.iter().collect::<String>()
                                 );
+                                return;
                             }
                             log::error!(
                                 "Error sending optional message: {}, message: {}",
@@ -344,6 +344,7 @@ impl TelegramBot {
                         }
                     }
                 }
+                from = to;
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         });
