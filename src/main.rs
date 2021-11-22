@@ -272,8 +272,8 @@ pub struct Main {
 impl Main {
     const DUMMY: i64 = 412313351i64;
     const MANAGER: i64 = 80788292i64;
-    pub const MAIN_CHAT: i64 = -741754684i64;
-    // pub const MAIN_CHAT: i64 = -1001053502877i64;
+    // pub const MAIN_CHAT: i64 = -741754684i64;
+    pub const MAIN_CHAT: i64 = -1001053502877i64;
 
     pub async fn new() -> Self {
         let data = Data::new("svoyak.db");
