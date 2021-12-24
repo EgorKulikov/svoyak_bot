@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 sled = "~0.34"
-telegram-bot = { git = "https://github.com/telegram-rs/telegram-bot" }
+telegram-bot = { git = "https://github.com/EgorKulikov/telegram-bot" }
 log = "~0.4"
 futures = "~0.3"
 env_logger = "~0.9"
