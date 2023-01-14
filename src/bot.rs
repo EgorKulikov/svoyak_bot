@@ -187,7 +187,7 @@ impl TelegramBot {
                         _ => {}
                     },
                     Err(err) => {
-                        log::error!("Error with update: {}", err);
+                        log::error!("Error with update: {:#?}", err);
                     }
                 };
             }
