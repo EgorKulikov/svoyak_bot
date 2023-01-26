@@ -6,7 +6,9 @@ use sled::transaction::{
 };
 use sled::Db;
 use std::collections::HashMap;
+#[cfg(test)]
 use std::fs::File;
+#[cfg(test)]
 use std::io::{BufRead, BufReader};
 use std::ops::{Add, BitAnd, Shl, Shr};
 use std::sync::{Arc, RwLock};
@@ -344,7 +346,7 @@ impl Data {
             res += format!(
                 "<b>{}.</b> {} {}\n",
                 place,
-                user_data.display_name,
+                user_data.display_name(),
                 display_rating(user_data.rating)
             )
             .as_str();
@@ -573,8 +575,14 @@ impl Data {
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
 pub struct UserData {
-    pub display_name: String,
+    display_name: String,
     pub rating: u32,
+}
+
+impl UserData {
+    pub fn display_name(&self) -> String {
+        html_escape::encode_text(&self.display_name).to_string()
+    }
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -746,6 +754,7 @@ fn main() {
     }
 }
 
+#[cfg(test)]
 fn read_file(filename: &str) -> Vec<String> {
     let path = format!("../olddb/{}", filename);
     log::info!("{}", path);

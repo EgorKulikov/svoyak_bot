@@ -88,7 +88,7 @@ pub fn player_list(users: &[&UserData]) -> String {
         if !res.is_empty() {
             res += ", ";
         }
-        res += format!("{} ({})", user.display_name, display_rating(user.rating)).as_str();
+        res += format!("{} ({})", user.display_name(), display_rating(user.rating)).as_str();
     }
     res
 }
@@ -616,7 +616,7 @@ impl Main {
                                 message += format!(
                                     "\n<b>{}</b>. {}",
                                     i + 1,
-                                    self.data.get_user_data(id).unwrap().display_name
+                                    self.data.get_user_data(id).unwrap().display_name()
                                 )
                                 .as_str();
                             }
@@ -636,7 +636,7 @@ impl Main {
                                 message += format!(
                                     "\n<b>{}</b>. {}",
                                     i + 1,
-                                    self.data.get_user_data(id).unwrap().display_name
+                                    self.data.get_user_data(id).unwrap().display_name()
                                 )
                                 .as_str();
                             }
@@ -676,7 +676,7 @@ impl Main {
                                                         self.data
                                                             .get_user_data(&to_ban)
                                                             .unwrap()
-                                                            .display_name
+                                                            .display_name()
                                                     ),
                                                 );
                                             }
@@ -688,7 +688,7 @@ impl Main {
                                                         self.data
                                                             .get_user_data(&to_ban)
                                                             .unwrap()
-                                                            .display_name
+                                                            .display_name()
                                                     ),
                                                 );
                                             }
@@ -737,7 +737,7 @@ impl Main {
                                                 self.data
                                                     .get_user_data(&to_ban)
                                                     .unwrap()
-                                                    .display_name
+                                                    .display_name()
                                             ),
                                         );
                                     }
@@ -1275,7 +1275,7 @@ impl Main {
             }
             user_list += format!(
                 "<a href=\"tg://user?id={}\">{}</a>",
-                user_id, user_data.display_name
+                user_id, user_data.display_name()
             )
             .as_str();
         }
@@ -1287,7 +1287,7 @@ impl Main {
                     self.data
                         .get_user_data(&UserId::new((*chat_id).into()))
                         .unwrap()
-                        .display_name
+                        .display_name()
                 );
                 self.scheduler_bot.try_send_message(
                     *chat_id,

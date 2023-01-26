@@ -307,7 +307,7 @@ impl GameHandle {
                 .map(|(id, (user, score, _))| {
                     (
                         *score,
-                        &user.display_name,
+                        user.display_name(),
                         current_ratings[id],
                         updated_ratings[id],
                     )
@@ -374,8 +374,8 @@ impl GameHandle {
         )
     }
 
-    fn user_name(&self, id: &i64) -> &String {
-        &self.game.players[id].0.display_name
+    fn user_name(&self, id: &i64) -> String {
+        self.game.players[id].0.display_name()
     }
 
     async fn process_message(&mut self, message: Message) {
@@ -587,7 +587,7 @@ impl GameHandle {
             .game
             .players
             .iter()
-            .map(|(_, (data, score, _))| (data.display_name.clone(), *score))
+            .map(|(_, (data, score, _))| (data.display_name(), *score))
             .collect::<Vec<_>>();
         score_list.sort_by(|(_, s1), (_, s2)| s2.cmp(s1));
         let mut result = String::new();
