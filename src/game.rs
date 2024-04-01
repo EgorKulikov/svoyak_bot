@@ -379,9 +379,12 @@ impl GameHandle {
     }
 
     async fn process_message(&mut self, message: Message) {
+        if message.from.is_none() {
+            return;
+        }
         match message.kind {
             MessageKind::Text { data, .. } => {
-                let from = &message.from.id.into();
+                let from = &message.from.as_ref().unwrap().id.into();
                 let data = data.trim().to_string();
                 let tokens = data.split(" ").collect::<Vec<_>>();
                 if tokens.is_empty() {

@@ -541,7 +541,11 @@ impl Main {
     }
 
     async fn process_private_message(&mut self, message: Message) {
-        if message.from.id == UserId::new(Self::MANAGER) {
+        if message.from.is_none() {
+            return;
+        }
+        let from = message.from.clone().unwrap();
+        if from.id == UserId::new(Self::MANAGER) {
             if self.process_manager_message(&message).await {
                 return;
             }
@@ -552,7 +556,7 @@ impl Main {
                 if text.is_empty() {
                     return;
                 }
-                let user_id = message.from.id;
+                let user_id = from.id;
                 let tokens = text.split(" ").collect::<Vec<_>>();
                 let command_str = tokens[0].to_lowercase();
                 let mut command = command_str.as_str();
@@ -573,7 +577,7 @@ impl Main {
                             self.send_shutting_down(user_id.into());
                         } else {
                             self.data
-                                .update_player(user_id, self.data.get_or_create_user(message.from));
+                                .update_player(user_id, self.data.get_or_create_user(from));
                             self.queue_sender
                                 .send(UpdateMessage::UserEntered(user_id))
                                 .unwrap();
@@ -780,6 +784,10 @@ impl Main {
     }
 
     async fn process_group_message(&mut self, message: Message) {
+        if message.from.is_none() {
+            return;
+        }
+        let from = message.from.clone().unwrap();
         match &message.kind {
             MessageKind::Text { data, .. } => {
                 let chat_id = message.chat.id();
@@ -790,7 +798,7 @@ impl Main {
                 if text.is_empty() {
                     return;
                 }
-                let user_id = message.from.id;
+                let user_id = from.id;
                 let tokens = text.split(" ").collect::<Vec<_>>();
                 let command_str = tokens[0].to_lowercase();
                 let mut command = command_str.as_str();
@@ -989,7 +997,7 @@ impl Main {
                                 .try_send_message(chat_id, "Все места заняты".to_string());
                         } else {
                             game_data
-                                .add_player(user_id, self.data.get_or_create_user(message.from));
+                                .add_player(user_id, self.data.get_or_create_user(from));
                             self.scheduler_bot
                                 .try_send_message(chat_id, game_data.to_string());
                         }
@@ -1008,7 +1016,7 @@ impl Main {
                                 let game_data = self.game_proposals.get_mut(&chat_id).unwrap();
                                 game_data.add_spectator(
                                     user_id,
-                                    self.data.get_or_create_user(message.from),
+                                    self.data.get_or_create_user(from),
                                 );
                                 self.scheduler_bot
                                     .try_send_message(chat_id, game_data.to_string());
@@ -1139,6 +1147,8 @@ impl Main {
     }
 
     fn unblock_set(&self, message: &Message, chat_id: ChatId, user_id: UserId, tokens: &[&str]) {
+        assert!(message.from.is_some());
+        let from = message.from.clone().unwrap();
         if tokens.is_empty() {
             self.scheduler_bot
                 .try_send_message(chat_id, "Укажите пакет".to_string());
@@ -1157,7 +1167,7 @@ impl Main {
                         format!(
                             "Пакет {} разблокирован для пользователя {}",
                             tokens[0],
-                            display_name(&message.from)
+                            display_name(&from)
                         ),
                     );
                 } else {
@@ -1166,7 +1176,7 @@ impl Main {
                         format!(
                             "Пакет {} не был заблокирован для пользователя {}",
                             tokens[0],
-                            display_name(&message.from)
+                            display_name(&from)
                         ),
                     );
                 }
@@ -1178,6 +1188,8 @@ impl Main {
     }
 
     fn block_set(&self, message: &Message, chat_id: ChatId, user_id: UserId, tokens: &[&str]) {
+        assert!(message.from.is_some());
+        let from = message.from.clone().unwrap();
         if tokens.is_empty() {
             self.scheduler_bot
                 .try_send_message(chat_id, "Укажите пакет".to_string());
@@ -1196,7 +1208,7 @@ impl Main {
                         format!(
                             "Пакет {} заблокирован для пользователя {}",
                             tokens[0],
-                            display_name(&message.from)
+                            display_name(&from)
                         ),
                     );
                 } else {
@@ -1205,7 +1217,7 @@ impl Main {
                         format!(
                             "Пакет {} уже был заблокирован для пользователя {}",
                             tokens[0],
-                            display_name(&message.from)
+                            display_name(&from)
                         ),
                     );
                 }
@@ -1339,7 +1351,11 @@ impl Main {
     }
 
     async fn process_play_message(&mut self, message: Message) {
-        if message.from.id == UserId::new(Self::DUMMY) {
+        if message.from.is_none() {
+            return;
+        }
+        let from = message.from.clone().unwrap();
+        if from.id == UserId::new(Self::DUMMY) {
             match message.kind {
                 MessageKind::Text { data, .. } => {
                     if data == "добавить" {
@@ -1400,7 +1416,7 @@ impl Main {
                         } else {
                             match message.kind {
                                 MessageKind::Text { .. } => {
-                                    self.play_bot.kick(message.chat.id(), message.from.id).await;
+                                    self.play_bot.kick(message.chat.id(), from.id).await;
                                 }
                                 MessageKind::NewChatMembers { data } => {
                                     for user in data {
