@@ -643,7 +643,7 @@ fn test_rating() {
                     display_name: i.to_string(),
                     rating: 15000,
                 },
-                i * 10 as i32,
+                (i * 10) as i32,
                 true,
             ),
         ));
@@ -656,7 +656,7 @@ fn test_rating() {
                 continue;
             }
             let rb = other.1 .0.rating;
-            let ea = 1f64 / (1f64 + 10f64.powf(((rb as f64) - (ra as f64)) / 400f64));
+            let ea = 1f64 / (1f64 + 10f64.powf(((rb as f64) - (ra as f64)) / 4000f64));
             let sa = if user.1 .1 < other.1 .1 {
                 0f64
             } else if user.1 .1 > other.1 .1 {

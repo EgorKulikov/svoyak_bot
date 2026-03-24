@@ -18,8 +18,8 @@ pub enum GameState {
     BeforeTopic(bool),
     BeforeFirstQuestion(bool),
     BeforeQuestion(bool),
-    Question(i64, Vec<i64>),
-    Answer(i64, Vec<i64>, i64),
+    Question(i64, Vec<i64>, usize),
+    Answer(i64, Vec<i64>, i64, usize),
     AfterQuestion(bool, Vec<i64>, Option<i64>),
     SpecialScore(bool),
     AfterGame,
@@ -39,8 +39,8 @@ impl GameState {
             GameState::BeforeTopic(_) => KeyboardOptions::Remove,
             GameState::BeforeFirstQuestion(_) => KeyboardOptions::Remove,
             GameState::BeforeQuestion(_) => KeyboardOptions::Plus,
-            GameState::Question(_, _) => KeyboardOptions::None,
-            GameState::Answer(_, _, _) => KeyboardOptions::Remove,
+            GameState::Question(_, _, _) => KeyboardOptions::None,
+            GameState::Answer(_, _, _, _) => KeyboardOptions::Remove,
             GameState::AfterQuestion(false, _, _) => KeyboardOptions::YesNoPause,
             GameState::AfterQuestion(true, _, _) => KeyboardOptions::YesNoContinue,
             GameState::SpecialScore(_) => KeyboardOptions::Remove,
@@ -60,7 +60,9 @@ impl GameState {
                 *paused = to_pause;
                 was
             }
-            GameState::Question(_, _) | GameState::Answer(_, _, _) | GameState::AfterGame => false,
+            GameState::Question(_, _, _) | GameState::Answer(_, _, _, _) | GameState::AfterGame => {
+                false
+            }
         }
     }
 
@@ -72,7 +74,7 @@ impl GameState {
             | GameState::BeforeQuestion(paused)
             | GameState::AfterQuestion(paused, _, _)
             | GameState::SpecialScore(paused) => *paused,
-            GameState::Question(_, _) | GameState::Answer(_, _, _) | GameState::AfterGame => {
+            GameState::Question(_, _, _) | GameState::Answer(_, _, _, _) | GameState::AfterGame => {
                 unreachable!()
             }
         }
@@ -156,8 +158,9 @@ impl GameHandle {
     const AFTER_GAME: Duration = Duration::from_secs(60);
     const INTERMISSION: Duration = Duration::from_secs(8);
     const PRE_GAME_STEP: Duration = Duration::from_secs(60);
-    const FIRST_THINKING: Duration = Duration::from_secs(15);
-    const SUCCESSIVE_THINKING: Duration = Duration::from_secs(10);
+    const TICK_DURATION: Duration = Duration::from_millis(2000);
+    const CHARS_PER_TICK: usize = 20;
+    const FULL_QUESTION_THINKING: Duration = Duration::from_secs(10);
     const PRE_GAME: Duration = Duration::from_secs(15);
     const ANSWER: Duration = Duration::from_secs(30);
 
@@ -202,12 +205,15 @@ impl GameHandle {
     }
 
     fn schedule_timeout(&mut self, duration: Duration) {
+        let delay = self
+            .play_bot
+            .rate_limit_delay(ChatId::new(self.game.chat_id));
         self.cancel_timer();
         self.state_id += 1;
         let sender = self.timeout_sender.clone();
         let id = self.state_id;
         self.timeout_handle = Some(tokio::spawn(async move {
-            tokio::time::sleep(duration).await;
+            tokio::time::sleep(duration + delay).await;
             match sender.send(Event::Timeout(id)) {
                 Ok(_) => {}
                 Err(err) => log::error!("Error with sending update: {}", err),
@@ -216,8 +222,14 @@ impl GameHandle {
     }
 
     async fn end_question(&mut self, pause_game: bool) {
-        if let GameState::Question(_, answers) = &self.game.game_state {
+        if let GameState::Question(message_id, answers, words_shown) = &self.game.game_state {
+            let message_id = *message_id;
+            let words_shown = *words_shown;
             self.game.game_state = GameState::AfterQuestion(pause_game, answers.clone(), None);
+            if words_shown < self.current_question().word_count() {
+                let text = self.question_text();
+                self.edit_message(&message_id, text).await;
+            }
             self.send_message(self.current_question().display_answers(false))
                 .await;
             self.schedule_timeout(Self::INTERMISSION);
@@ -227,12 +239,20 @@ impl GameHandle {
     }
 
     async fn incorrect_answer(&mut self, timeout: bool, force_stop_timer: bool) {
-        if let GameState::Answer(message_id, answers, current) = self.game.game_state.clone() {
+        if let GameState::Answer(message_id, answers, current, words_shown) =
+            self.game.game_state.clone()
+        {
             let restart_timer = !force_stop_timer && answers.len() + 1 != self.game.players.len();
             let mut answers = answers.clone();
             answers.push(current);
-            self.game.game_state = GameState::Question(message_id, answers);
-            self.edit_message(&message_id).await;
+            if restart_timer {
+                self.play_bot
+                    .delete_message(
+                        ChatId::new(self.game.chat_id),
+                        MessageId::new(message_id),
+                    )
+                    .await;
+            }
             self.play_bot
                 .send_message(
                     ChatId::new(self.game.chat_id),
@@ -249,8 +269,25 @@ impl GameHandle {
                 )
                 .await;
             if restart_timer {
-                self.schedule_timeout(Self::SUCCESSIVE_THINKING);
+                let total_words = self.current_question().word_count();
+                let text = if words_shown >= total_words {
+                    self.question_text()
+                } else {
+                    self.partial_question_text(words_shown)
+                };
+                let new_message_id = self
+                    .send_message_with_markup(text, KeyboardOptions::None)
+                    .await
+                    .unwrap();
+                self.game.game_state =
+                    GameState::Question(new_message_id, answers, words_shown);
+                if words_shown >= total_words {
+                    self.schedule_timeout(Self::FULL_QUESTION_THINKING);
+                } else {
+                    self.schedule_timeout(Self::TICK_DURATION);
+                }
             } else {
+                self.game.game_state = GameState::Question(message_id, answers, words_shown);
                 match self.timeout_sender.send(Event::Timeout(self.state_id)) {
                     Ok(_) => {}
                     Err(err) => panic!("Error with sending update: {}", err),
@@ -261,12 +298,12 @@ impl GameHandle {
         }
     }
 
-    async fn edit_message(&mut self, message_id: &i64) {
+    async fn edit_message(&mut self, message_id: &i64, text: String) {
         self.play_bot
             .edit_message(
                 ChatId::new(self.game.chat_id),
                 MessageId::new(*message_id),
-                self.question_text(),
+                text,
             )
             .await;
     }
@@ -458,29 +495,19 @@ impl GameHandle {
                     GameState::BeforeTopic(_) => {}
                     GameState::BeforeFirstQuestion(_) => {}
                     GameState::BeforeQuestion(_) => {}
-                    GameState::Question(message_id, answers) => {
+                    GameState::Question(message_id, answers, words_shown) => {
                         if command == "+"
                             && !answers.contains(from)
                             && self.game.players.contains_key(from)
                         {
-                            self.game.game_state = GameState::Answer(message_id, answers, *from);
-                            self.play_bot
-                                .edit_message(
-                                    message.chat.id(),
-                                    MessageId::new(message_id),
-                                    format!(
-                                        "<b>Тема</b> {}\n<b>{}.</b> Вопрос скрыт",
-                                        self.topic_title(),
-                                        self.current_question().cost
-                                    ),
-                                )
-                                .await;
+                            self.game.game_state =
+                                GameState::Answer(message_id, answers, *from, words_shown);
                             self.send_message(format!("Ваш ответ, {}?", self.user_name(from)))
                                 .await;
                             self.schedule_timeout(Self::ANSWER);
                         }
                     }
-                    GameState::Answer(message_id, mut answers, current) => {
+                    GameState::Answer(message_id, mut answers, current, words_shown) => {
                         if *from == current {
                             if data == "+" {
                                 return;
@@ -489,7 +516,10 @@ impl GameHandle {
                                 answers.push(current);
                                 self.game.game_state =
                                     GameState::AfterQuestion(false, answers, Some(current));
-                                self.edit_message(&message_id).await;
+                                if words_shown < self.current_question().word_count() {
+                                    let text = self.question_text();
+                                    self.edit_message(&message_id, text).await;
+                                }
                                 self.send_message(format!(
                                     "Это правильный ответ, {}\n{}",
                                     self.user_name(&current),
@@ -637,6 +667,26 @@ impl GameHandle {
             .display_question(&self.topic_title())
     }
 
+    fn partial_question_text(&self, words_shown: usize) -> String {
+        self.current_question()
+            .display_question_partial(&self.topic_title(), words_shown)
+    }
+
+    fn next_words_shown(&self, words_shown: usize) -> usize {
+        let question = self.current_question();
+        let total = question.word_count();
+        let mut new_shown = words_shown;
+        let mut chars_added = 0usize;
+        while new_shown < total {
+            new_shown += 1;
+            chars_added += question.word_char_len(new_shown - 1);
+            if chars_added >= Self::CHARS_PER_TICK {
+                break;
+            }
+        }
+        new_shown
+    }
+
     async fn advance_state(&mut self) -> bool {
         if self.game.game_state.set_pause(false) {
             self.send_message("Игра возобновлена".to_string()).await;
@@ -713,17 +763,42 @@ impl GameHandle {
                     self.ask_question().await;
                 }
                 GameState::BeforeQuestion(_) => {
+                    let text = self.partial_question_text(0);
                     let id = self
-                        .send_message_with_markup(self.question_text(), KeyboardOptions::None)
+                        .send_message_with_markup(text, KeyboardOptions::None)
                         .await
                         .unwrap();
-                    self.game.game_state = GameState::Question(id, Vec::new());
-                    self.schedule_timeout(Self::FIRST_THINKING);
+                    self.game.game_state = GameState::Question(id, Vec::new(), 0);
+                    self.schedule_timeout(Self::TICK_DURATION);
                 }
-                GameState::Question(_, _) => {
-                    self.end_question(false).await;
+                GameState::Question(message_id, answers, words_shown) => {
+                    let total_words = self.current_question().word_count();
+                    if words_shown >= total_words {
+                        // Full question shown, thinking time expired
+                        self.end_question(false).await;
+                    } else {
+                        let new_words = self.next_words_shown(words_shown);
+                        self.game.game_state =
+                            GameState::Question(message_id, answers, new_words);
+                        let text = if new_words >= total_words {
+                            self.question_text()
+                        } else {
+                            self.partial_question_text(new_words)
+                        };
+                        self.edit_message(&message_id, text).await;
+                        if new_words >= total_words {
+                            self.play_bot.try_react(
+                                ChatId::new(self.game.chat_id),
+                                MessageId::new(message_id),
+                                "👌",
+                            );
+                            self.schedule_timeout(Self::FULL_QUESTION_THINKING);
+                        } else {
+                            self.schedule_timeout(Self::TICK_DURATION);
+                        }
+                    }
                 }
-                GameState::Answer(_, _, _) => {
+                GameState::Answer(_, _, _, _) => {
                     self.incorrect_answer(true, false).await;
                 }
                 GameState::AfterQuestion(_, answered, correct) => {
@@ -830,10 +905,10 @@ impl GameHandle {
                 self.schedule_timeout(Self::PAUSE);
                 self.game.game_state = GameState::BeforeQuestion(true);
             }
-            GameState::Question(_, _) => {
+            GameState::Question(_, _, _) => {
                 self.end_question(true).await;
             }
-            GameState::Answer(_, _, _) => {
+            GameState::Answer(_, _, _, _) => {
                 self.incorrect_answer(false, true).await;
             }
             GameState::AfterQuestion(_, answers, correct_answer) => {

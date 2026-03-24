@@ -53,7 +53,7 @@ impl<'s> GameFinder<'s> {
             || one.max_rating >= another.user_data.rating as i64
                 && one.min_rating <= another.user_data.rating as i64
                 && another.max_rating >= one.user_data.rating as i64
-                && another.min_rating <= another.user_data.rating as i64)
+                && another.min_rating <= one.user_data.rating as i64)
             && !self.data.in_ban_list(one.user_id, another.user_id)
             && !self.data.in_ban_list(another.user_id, one.user_id)
     }
@@ -116,7 +116,7 @@ pub struct PlayQueue {
     update_stream: Option<UnboundedReceiverStream<UpdateMessage>>,
     find_sender: UnboundedSender<UpdateMessage>,
     find_stream: Option<UnboundedReceiverStream<UpdateMessage>>,
-    queue_message_id: MessageId,
+    queue_message_id: Option<MessageId>,
 }
 
 impl PlayQueue {
@@ -124,7 +124,7 @@ impl PlayQueue {
         data: Data,
         scheduler_bot: TelegramBot,
         update_stream: UnboundedReceiverStream<UpdateMessage>,
-        queue_message_id: MessageId,
+        queue_message_id: Option<MessageId>,
     ) -> (
         Self,
         UnboundedReceiverStream<(GameStartData, String, Vec<usize>)>,
@@ -205,14 +205,16 @@ impl PlayQueue {
                 Self::queue_message_text(self.queue.len()),
             );
         }
-        self.bot.try_edit_message(
-            ChatId::new(Main::MAIN_CHAT),
-            self.queue_message_id,
-            format!(
-                "Всего игроков в очереди <b>{}</b>\nДля игры пройдите в @SvoyakSchedulerBot",
-                self.queue.len()
-            ),
-        );
+        if let (Some(main_chat), Some(message_id)) = (Main::MAIN_CHAT, self.queue_message_id) {
+            self.bot.try_edit_message(
+                ChatId::new(main_chat),
+                message_id,
+                format!(
+                    "Всего игроков в очереди <b>{}</b>\nДля игры пройдите в @SvoyakSchedulerBot",
+                    self.queue.len()
+                ),
+            );
+        }
     }
 
     pub async fn start(&mut self) {

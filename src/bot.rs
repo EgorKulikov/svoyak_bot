@@ -8,10 +8,11 @@ use std::ops::Add;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use telegram_bot::{
-    Api, ChatId, ChatMemberStatus, ChatRef, Document, EditMessageText, GetChatMember, GetFile,
-    HttpRequest, Integer, KeyboardButton, KickChatMember, Message, MessageId, MessageOrChannelPost,
-    ParseMode, ReplyKeyboardMarkup, ReplyKeyboardRemove, ReplyMarkup, Request, RequestType,
-    RequestUrl, ResponseType, SendMessage, ToChatRef, UpdateKind, User, UserId,
+    Api, ChatId, ChatMember, ChatRef, DeleteMessage, Document, EditMessageText,
+    GetChatMember, GetFile, HttpRequest, Integer, KeyboardButton, KickChatMember, Message,
+    MessageId, MessageOrChannelPost, ParseMode, ReactionType, ReplyKeyboardMarkup,
+    ReplyKeyboardRemove, ReplyMarkup, Request, RequestType, RequestUrl, ResponseType,
+    SendMessage, SetMessageReaction, ToChatRef, UnbanChatMember, UpdateKind, User, UserId,
 };
 use telegram_bot::{JsonIdResponse, True};
 use telegram_bot::{JsonRequestType, ToMessageId};
@@ -57,6 +58,7 @@ impl Request for SetMyCommands {
         <Self::Type as RequestType>::serialize(RequestUrl::method("setMyCommands"), self)
     }
 }
+
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize)]
 struct DeleteMyCommands {
@@ -163,11 +165,21 @@ pub struct TelegramBot {
     token: String,
     api: Api,
     next_time_slot: Arc<RwLock<HashMap<ChatId, Instant>>>,
+    rate_limited_until: Arc<RwLock<HashMap<ChatId, Instant>>>,
 }
 
 impl TelegramBot {
     const MAX_LEN: usize = 4096;
     const TRIES: u8 = 20;
+
+    fn parse_retry_after(error_message: &str) -> Option<u64> {
+        let pos = error_message.find("retry after ")?;
+        error_message[pos + "retry after ".len()..]
+            .split(|c: char| !c.is_ascii_digit())
+            .next()?
+            .parse()
+            .ok()
+    }
 
     pub fn new(token: String) -> (TelegramBot, UnboundedReceiverStream<Message>) {
         let api = Api::new(token.clone());
@@ -198,6 +210,7 @@ impl TelegramBot {
                 token,
                 api,
                 next_time_slot: Arc::new(RwLock::new(HashMap::new())),
+                rate_limited_until: Arc::new(RwLock::new(HashMap::new())),
             },
             UnboundedReceiverStream::new(receiver),
         )
@@ -245,7 +258,7 @@ impl TelegramBot {
         if let Some(reply_markup) = reply_markup {
             request.reply_markup(reply_markup);
         }
-        let message = self.send_request(request).await.unwrap();
+        let message = self.send_request(request, Some(chat_id)).await.unwrap();
         self.save_slot(chat_id);
         match message {
             MessageOrChannelPost::Message(message) => Some(message.id),
@@ -284,6 +297,8 @@ impl TelegramBot {
     pub fn try_edit_message(&self, chat_id: ChatId, message_id: MessageId, message: String) {
         let bot = self.clone();
         tokio::spawn(async move {
+            bot.wait_for_slot(chat_id).await;
+            bot.save_slot(chat_id);
             match bot
                 .api
                 .send(Self::new_edit_message(chat_id, message_id, message))
@@ -291,7 +306,19 @@ impl TelegramBot {
             {
                 Ok(_) => {}
                 Err(err) => {
-                    log::error!("Try edit message failed with error: {}", err);
+                    let error_message = format!("{}", err);
+                    if let Some(retry_after) = Self::parse_retry_after(&error_message) {
+                        log::error!(
+                            "Rate limited on edit, retry after {} seconds: {}",
+                            retry_after,
+                            error_message
+                        );
+                        let until = Instant::now() + Duration::from_secs(retry_after);
+                        bot.next_time_slot.write().unwrap().insert(chat_id, until);
+                        bot.rate_limited_until.write().unwrap().insert(chat_id, until);
+                    } else {
+                        log::error!("Try edit message failed with error: {}", err);
+                    }
                 }
             }
         });
@@ -311,7 +338,8 @@ impl TelegramBot {
                         break;
                     }
                 }
-                for _ in 0..Self::TRIES {
+                let mut tries = 0u8;
+                while tries < Self::TRIES {
                     match bot
                         .api
                         .send(Self::new_message(
@@ -335,12 +363,27 @@ impl TelegramBot {
                                 );
                                 return;
                             }
-                            log::error!(
-                                "Error sending optional message: {}, message: {}",
-                                error_message,
-                                message.iter().collect::<String>()
-                            );
-                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            if let Some(retry_after) = Self::parse_retry_after(&error_message) {
+                                log::error!(
+                                    "Rate limited, retry after {} seconds: {}, message: {}",
+                                    retry_after,
+                                    error_message,
+                                    message.iter().collect::<String>()
+                                );
+                                bot.next_time_slot.write().unwrap().insert(
+                                    chat_id,
+                                    Instant::now() + Duration::from_secs(retry_after),
+                                );
+                                tokio::time::sleep(Duration::from_secs(retry_after)).await;
+                            } else {
+                                log::error!(
+                                    "Error sending optional message: {}, message: {}",
+                                    error_message,
+                                    message.iter().collect::<String>()
+                                );
+                                tries += 1;
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                            }
                         }
                     }
                 }
@@ -361,8 +404,32 @@ impl TelegramBot {
     }
 
     pub async fn edit_message(&self, chat_id: ChatId, message_id: MessageId, text: String) {
-        self.send_request(Self::new_edit_message(chat_id, message_id, text))
+        self.send_request(Self::new_edit_message(chat_id, message_id, text), Some(chat_id))
             .await;
+    }
+
+    pub fn try_react(&self, chat_id: ChatId, message_id: MessageId, emoji: &str) {
+        let bot = self.clone();
+        let mut request = SetMessageReaction::new(chat_id, message_id);
+        request.reaction(vec![ReactionType::Emoji {
+            emoji: emoji.to_string(),
+        }]);
+        tokio::spawn(async move {
+            match bot.api.send(request).await {
+                Ok(_) => {}
+                Err(err) => {
+                    log::error!("React failed: {}", err);
+                }
+            }
+        });
+    }
+
+    pub async fn delete_message(&self, chat_id: ChatId, message_id: MessageId) {
+        self.wait_for_slot(chat_id).await;
+        self.block_slot(chat_id);
+        self.send_request(DeleteMessage::new(chat_id, message_id), Some(chat_id))
+            .await;
+        self.save_slot(chat_id);
     }
 
     pub async fn get_file(&self, document: Document) -> Option<(String, String)> {
@@ -375,7 +442,7 @@ impl TelegramBot {
         {
             return None;
         }
-        let file = self.send_request(GetFile::new(doc.clone())).await.unwrap();
+        let file = self.send_request(GetFile::new(doc.clone()), None).await.unwrap();
         let url = file.get_url(self.token.as_str());
         if url.is_none() {
             return None;
@@ -390,7 +457,9 @@ impl TelegramBot {
         self.wait_for_slot(chat_id).await;
         self.block_slot(chat_id);
         if self.is_chat_member(chat_id, user_id).await {
-            self.send_request(KickChatMember::new(chat_id, user_id))
+            self.send_request(KickChatMember::new(chat_id, user_id), Some(chat_id))
+                .await;
+            self.send_request(UnbanChatMember::new(chat_id, user_id), Some(chat_id))
                 .await;
         }
         self.save_slot(chat_id);
@@ -399,7 +468,7 @@ impl TelegramBot {
     pub async fn invalidate_invite_link(&self, chat_id: ChatId, invite_link: String) {
         self.wait_for_slot(chat_id).await;
         self.block_slot(chat_id);
-        self.send_request(RevokeChatInviteLink::new(chat_id, invite_link))
+        self.send_request(RevokeChatInviteLink::new(chat_id, invite_link), Some(chat_id))
             .await;
         self.save_slot(chat_id);
     }
@@ -408,7 +477,7 @@ impl TelegramBot {
         self.wait_for_slot(chat_id).await;
         self.block_slot(chat_id);
         let res = self
-            .send_request(CreateChatInviteLink::new(chat_id))
+            .send_request(CreateChatInviteLink::new(chat_id), Some(chat_id))
             .await
             .unwrap()
             .invite_link;
@@ -418,17 +487,17 @@ impl TelegramBot {
 
     async fn is_chat_member(&self, chat_id: ChatId, user_id: UserId) -> bool {
         match self
-            .send_request(GetChatMember::new(chat_id, user_id))
+            .send_request(GetChatMember::new(chat_id, user_id), Some(chat_id))
             .await
         {
             None => false,
-            Some(member) => member.status == ChatMemberStatus::Member,
+            Some(member) => matches!(member, ChatMember::Member { .. }),
         }
     }
 
     pub async fn all_players_in_chat(&self, chat_id: ChatId, users: Vec<UserId>) -> bool {
         for user_id in users {
-            if self.is_chat_member(chat_id, user_id).await {
+            if !self.is_chat_member(chat_id, user_id).await {
                 return false;
             }
         }
@@ -446,27 +515,37 @@ impl TelegramBot {
     }
 
     //noinspection RsSelfConvention
-    pub async fn set_commands(&self, main_chat: ChatId, manager: ChatId) {
+    pub async fn set_commands(&self, main_chat: Option<ChatId>, manager: ChatId) {
         self.send_request(SetMyCommands::new(
             Self::build_commands(&PRIVATE_BOT_COMMANDS),
             "all_private_chats",
             None,
-        ))
+        ), None)
         .await;
         let mut manager_commands = Self::build_commands(&MANAGER_COMMANDS);
         manager_commands.append(&mut Self::build_commands(&PRIVATE_BOT_COMMANDS));
-        self.send_request(SetMyCommands::new(manager_commands, "chat", Some(manager)))
+        self.send_request(SetMyCommands::new(manager_commands, "chat", Some(manager)), None)
             .await;
         self.send_request(SetMyCommands::new(
             Self::build_commands(&GROUP_BOT_COMMANDS),
             "all_group_chats",
             None,
-        ))
+        ), None)
         .await;
-        self.send_request(DeleteMyCommands::new("chat", Some(main_chat)))
-            .await;
-        self.send_request(SetMyCommands::new(Vec::new(), "chat", Some(main_chat)))
-            .await;
+        if let Some(main_chat) = main_chat {
+            self.send_request(DeleteMyCommands::new("chat", Some(main_chat)), None)
+                .await;
+            self.send_request(SetMyCommands::new(Vec::new(), "chat", Some(main_chat)), None)
+                .await;
+        }
+    }
+
+    pub fn rate_limit_delay(&self, chat_id: ChatId) -> Duration {
+        let now = Instant::now();
+        match self.rate_limited_until.read().unwrap().get(&chat_id) {
+            Some(until) if *until > now => *until - now,
+            _ => Duration::ZERO,
+        }
     }
 
     async fn wait_for_slot(&self, chat_id: ChatId) {
@@ -486,7 +565,12 @@ impl TelegramBot {
 
     fn save_slot(&self, chat_id: ChatId) {
         let mut guard = self.next_time_slot.write().unwrap();
-        guard.insert(chat_id, Instant::now().add(Duration::from_secs(1)));
+        let new_slot = Instant::now().add(Duration::from_secs(1));
+        let rate_limit = self.rate_limited_until.read().unwrap().get(&chat_id).cloned();
+        match rate_limit {
+            Some(until) if until > new_slot => guard.insert(chat_id, until),
+            _ => guard.insert(chat_id, new_slot),
+        };
     }
 
     fn block_slot(&self, chat_id: ChatId) {
@@ -497,8 +581,10 @@ impl TelegramBot {
     async fn send_request<Req: Request + Clone + Debug>(
         &self,
         request: Req,
+        chat_id: Option<ChatId>,
     ) -> Option<<<Req as Request>::Response as ResponseType>::Type> {
-        for _ in 0..Self::TRIES {
+        let mut tries = 0u8;
+        while tries < Self::TRIES {
             let result = self.api.send(request.clone()).await;
             match result {
                 Ok(result) => {
@@ -515,12 +601,28 @@ impl TelegramBot {
                         );
                         return None;
                     }
-                    log::error!(
-                        "Error sending message: {}, message: {:#?}",
-                        error_message,
-                        request
-                    );
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    if let Some(retry_after) = Self::parse_retry_after(&error_message) {
+                        log::error!(
+                            "Rate limited, retry after {} seconds: {}, message: {:#?}",
+                            retry_after,
+                            error_message,
+                            request
+                        );
+                        if let Some(chat_id) = chat_id {
+                            let until = Instant::now() + Duration::from_secs(retry_after);
+                            self.next_time_slot.write().unwrap().insert(chat_id, until);
+                            self.rate_limited_until.write().unwrap().insert(chat_id, until);
+                        }
+                        tokio::time::sleep(Duration::from_secs(retry_after)).await;
+                    } else {
+                        log::error!(
+                            "Error sending message: {}, message: {:#?}",
+                            error_message,
+                            request
+                        );
+                        tries += 1;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
                 }
             }
         }

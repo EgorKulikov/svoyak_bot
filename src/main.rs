@@ -272,8 +272,8 @@ pub struct Main {
 impl Main {
     const DUMMY: i64 = 6160579794i64;
     const MANAGER: i64 = 80788292i64;
-    // pub const MAIN_CHAT: i64 = -741754684i64;
-    pub const MAIN_CHAT: i64 = -1001053502877i64;
+    // pub const MAIN_CHAT: Option<i64> = None;
+    pub const MAIN_CHAT: Option<i64> = Some(-1001053502877i64);
 
     pub async fn new() -> Self {
         let data = Data::new("svoyak.db");
@@ -283,20 +283,23 @@ impl Main {
         let (status_sender, status_receiver) = unbounded_channel();
         let (timeout_sender, timeout_receiver) = unbounded_channel();
         let (queue_sender, queue_receiver) = unbounded_channel();
-        let message_id = scheduler_bot
-            .send_message(
-                ChatId::new(Self::MAIN_CHAT),
-                "Всего игроков в очереди <b>0</b>\nДля игры пройдите в @SvoyakSchedulerBot"
-                    .to_string(),
-                KeyboardOptions::None,
-            )
-            .await
-            .unwrap();
+        let queue_message_id = if let Some(main_chat) = Self::MAIN_CHAT {
+            scheduler_bot
+                .send_message(
+                    ChatId::new(main_chat),
+                    "Всего игроков в очереди <b>0</b>\nДля игры пройдите в @SvoyakSchedulerBot"
+                        .to_string(),
+                    KeyboardOptions::None,
+                )
+                .await
+        } else {
+            None
+        };
         let (queue, queue_stream) = PlayQueue::new(
             data.clone(),
             scheduler_bot.clone(),
             UnboundedReceiverStream::new(queue_receiver),
-            message_id,
+            queue_message_id,
         );
 
         Self {
@@ -321,7 +324,7 @@ impl Main {
 
     pub async fn run(mut self) {
         self.scheduler_bot
-            .set_commands(ChatId::new(Self::MAIN_CHAT), ChatId::new(Self::MANAGER))
+            .set_commands(Self::MAIN_CHAT.map(ChatId::new), ChatId::new(Self::MANAGER))
             .await;
         self.play_chats = self.data.get_game_chats().iter().map(|id| *id).collect();
         for game in self.data.get_game_states() {
@@ -418,7 +421,9 @@ impl Main {
                 match command {
                     "shutdown" | "выключение" => {
                         self.shutting_down = true;
-                        self.send_shutting_down(ChatId::new(Self::MAIN_CHAT));
+                        if let Some(main_chat) = Self::MAIN_CHAT {
+                            self.send_shutting_down(ChatId::new(main_chat));
+                        }
                         self.queue_sender.send(UpdateMessage::Shutdown).unwrap();
                         true
                     }
@@ -523,8 +528,9 @@ impl Main {
                         Some(set) => {
                             let id = set.id.clone();
                             if self.data.add_new_set(&id, set) {
+                                self.data.add_active(&id);
                                 self.scheduler_bot
-                                    .try_send_message(chat_id, "Пакет загружен".to_string());
+                                    .try_send_message(chat_id, "Пакет загружен и включен".to_string());
                             } else {
                                 self.scheduler_bot.try_send_message(
                                     chat_id,
@@ -791,7 +797,7 @@ impl Main {
         match &message.kind {
             MessageKind::Text { data, .. } => {
                 let chat_id = message.chat.id();
-                if chat_id == ChatId::new(Self::MAIN_CHAT) {
+                if Self::MAIN_CHAT.is_some_and(|id| chat_id == ChatId::new(id)) {
                     return;
                 }
                 let text = data.trim();
@@ -1377,6 +1383,28 @@ impl Main {
                                 )
                                 .await;
                         }
+                    } else if let Some(id_str) = data.strip_prefix("удалить ") {
+                        if let Ok(id) = id_str.trim().parse::<i64>() {
+                            let target = ChatId::new(id);
+                            if self.play_chats.remove(&target) {
+                                self.data.remove_game_chat(&id);
+                                self.play_bot
+                                    .send_message(
+                                        message.chat.id(),
+                                        format!("Чат {} удален", id),
+                                        KeyboardOptions::None,
+                                    )
+                                    .await;
+                            } else {
+                                self.play_bot
+                                    .send_message(
+                                        message.chat.id(),
+                                        format!("Чат {} не в списке", id),
+                                        KeyboardOptions::None,
+                                    )
+                                    .await;
+                            }
+                        }
                     } else if data == "удалить" {
                         if self.play_chats.remove(&message.chat.id()) {
                             self.data.remove_game_chat(&message.chat.id().into());
@@ -1409,7 +1437,7 @@ impl Main {
                             .to_string(),
                     );
                 }
-                MessageChat::Group(_) => {
+                MessageChat::Group(_) | MessageChat::Supergroup(_) => {
                     if self.play_chats.contains(&message.chat.id()) {
                         if let Some((sender, _)) = self.games.get(&message.chat.id()) {
                             sender.send(message).unwrap();
@@ -1434,7 +1462,6 @@ impl Main {
                         );
                     }
                 }
-                MessageChat::Supergroup(_) => {}
                 MessageChat::Unknown(_) => {}
             }
         }

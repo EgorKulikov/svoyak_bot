@@ -41,13 +41,30 @@ impl Question {
         )
     }
 
-    pub fn fix(&self) -> Question {
-        Self::new(
-            self.cost,
-            self.question.clone(),
-            &self.answers.iter().cloned().collect::<Vec<_>>(),
-            self.comment.clone(),
+    pub fn display_question_partial(&self, topic_name: &str, words_shown: usize) -> String {
+        let words: Vec<&str> = self.question.split_whitespace().collect();
+        let shown = words[..words_shown.min(words.len())].join(" ");
+        format!(
+            "<b>Тема</b> {}\n<b>{}.</b> {}",
+            topic_name, self.cost, shown
         )
+    }
+
+    pub fn word_count(&self) -> usize {
+        self.question.split_whitespace().count()
+    }
+
+    pub fn word_char_len(&self, index: usize) -> usize {
+        self.question.split_whitespace().nth(index).map_or(0, |w| w.chars().count())
+    }
+
+    pub fn fix(&self) -> Question {
+        Question {
+            cost: self.cost,
+            question: self.question.clone(),
+            answers: self.answers.clone(),
+            comment: self.comment.clone(),
+        }
     }
 
     pub fn display_answers(&self, after_right_answer: bool) -> String {
