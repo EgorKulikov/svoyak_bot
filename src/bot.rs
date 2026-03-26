@@ -10,9 +10,9 @@ use std::time::Duration;
 use telegram_bot::{
     Api, ChatId, ChatMember, ChatRef, DeleteMessage, Document, EditMessageText,
     GetChatMember, GetFile, HttpRequest, Integer, KeyboardButton, KickChatMember, Message,
-    MessageId, MessageOrChannelPost, ParseMode, ReactionType, ReplyKeyboardMarkup,
+    MessageId, MessageOrChannelPost, ParseMode, ReplyKeyboardMarkup,
     ReplyKeyboardRemove, ReplyMarkup, Request, RequestType, RequestUrl, ResponseType,
-    SendMessage, SetMessageReaction, ToChatRef, UnbanChatMember, UpdateKind, User, UserId,
+    SendMessage, ToChatRef, UnbanChatMember, UpdateKind, User, UserId,
 };
 use telegram_bot::{JsonIdResponse, True};
 use telegram_bot::{JsonRequestType, ToMessageId};
@@ -258,7 +258,18 @@ impl TelegramBot {
         if let Some(reply_markup) = reply_markup {
             request.reply_markup(reply_markup);
         }
-        let message = self.send_request(request, Some(chat_id)).await.unwrap();
+        let message = match self.send_request(request, Some(chat_id)).await {
+            Some(message) => message,
+            None => {
+                // Retry without HTML parse mode (likely bad entities)
+                let mut fallback = SendMessage::new(chat_id, text);
+                let reply_markup = keyboard_options.reply_markup();
+                if let Some(reply_markup) = reply_markup {
+                    fallback.reply_markup(reply_markup);
+                }
+                self.send_request(fallback, Some(chat_id)).await.unwrap()
+            }
+        };
         self.save_slot(chat_id);
         match message {
             MessageOrChannelPost::Message(message) => Some(message.id),
@@ -301,12 +312,20 @@ impl TelegramBot {
             bot.save_slot(chat_id);
             match bot
                 .api
-                .send(Self::new_edit_message(chat_id, message_id, message))
+                .send(Self::new_edit_message(chat_id, message_id, message.clone()))
                 .await
             {
                 Ok(_) => {}
                 Err(err) => {
                     let error_message = format!("{}", err);
+                    if error_message.contains("can't parse entities") {
+                        log::warn!("Retrying edit without HTML: {}", error_message);
+                        let _ = bot
+                            .api
+                            .send(EditMessageText::new(chat_id, message_id, message))
+                            .await;
+                        return;
+                    }
                     if let Some(retry_after) = Self::parse_retry_after(&error_message) {
                         log::error!(
                             "Rate limited on edit, retry after {} seconds: {}",
@@ -353,6 +372,15 @@ impl TelegramBot {
                         }
                         Err(err) => {
                             let error_message = format!("{}", err);
+                            if error_message.contains("can't parse entities") {
+                                log::warn!("Retrying send without HTML: {}", error_message);
+                                let plain = SendMessage::new(
+                                    chat_id,
+                                    message[from..to].iter().cloned().collect::<String>(),
+                                );
+                                let _ = bot.api.send(plain).await;
+                                break;
+                            }
                             if error_message.contains("Bad Request")
                                 || error_message.contains("Forbidden")
                             {
@@ -404,25 +432,23 @@ impl TelegramBot {
     }
 
     pub async fn edit_message(&self, chat_id: ChatId, message_id: MessageId, text: String) {
-        self.send_request(Self::new_edit_message(chat_id, message_id, text), Some(chat_id))
+        if self
+            .send_request(
+                Self::new_edit_message(chat_id, message_id, text.clone()),
+                Some(chat_id),
+            )
+            .await
+            .is_none()
+        {
+            // Retry without HTML parse mode
+            self.send_request(
+                EditMessageText::new(chat_id, message_id, text),
+                Some(chat_id),
+            )
             .await;
+        }
     }
 
-    pub fn try_react(&self, chat_id: ChatId, message_id: MessageId, emoji: &str) {
-        let bot = self.clone();
-        let mut request = SetMessageReaction::new(chat_id, message_id);
-        request.reaction(vec![ReactionType::Emoji {
-            emoji: emoji.to_string(),
-        }]);
-        tokio::spawn(async move {
-            match bot.api.send(request).await {
-                Ok(_) => {}
-                Err(err) => {
-                    log::error!("React failed: {}", err);
-                }
-            }
-        });
-    }
 
     pub async fn delete_message(&self, chat_id: ChatId, message_id: MessageId) {
         self.wait_for_slot(chat_id).await;

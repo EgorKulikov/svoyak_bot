@@ -1,13 +1,15 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use html_escape::encode_text;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(BorshSerialize, BorshDeserialize, Clone, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize, Clone, Deserialize, Serialize)]
 pub struct Question {
     pub cost: u16,
     pub question: String,
     pub answers: Vec<String>,
     pub comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<String>,
 }
 
 impl Question {
@@ -17,6 +19,7 @@ impl Question {
             question: encode(&question),
             answers: answers.iter().map(|ans| encode(ans)).collect(),
             comment: comment.map(|comment| encode(&comment)),
+            form: None,
         }
     }
 
@@ -37,7 +40,9 @@ impl Question {
     pub fn display_question(&self, topic_name: &str) -> String {
         format!(
             "<b>Тема</b> {}\n<b>{}.</b> {}",
-            topic_name, self.cost, self.question
+            encode_text(topic_name),
+            self.cost,
+            encode_text(&self.question)
         )
     }
 
@@ -46,7 +51,9 @@ impl Question {
         let shown = words[..words_shown.min(words.len())].join(" ");
         format!(
             "<b>Тема</b> {}\n<b>{}.</b> {}",
-            topic_name, self.cost, shown
+            encode_text(topic_name),
+            self.cost,
+            encode_text(&shown)
         )
     }
 
@@ -64,6 +71,7 @@ impl Question {
             question: self.question.clone(),
             answers: self.answers.clone(),
             comment: self.comment.clone(),
+            form: self.form.clone(),
         }
     }
 
@@ -81,11 +89,11 @@ impl Question {
             } else {
                 res += "\n<b>Зачет</b>: ";
             }
-            res += answer.as_str();
+            res += encode_text(answer).as_ref();
         }
         if let Some(comment) = &self.comment {
             res += "\n<b>Комментарий</b>: ";
-            res += comment.as_str();
+            res += encode_text(comment).as_ref();
         }
         res
     }
@@ -112,7 +120,7 @@ impl Question {
     }
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Clone, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize, Clone, Deserialize, Serialize)]
 pub struct Topic {
     pub name: String,
     pub questions: Vec<Question>,
@@ -137,7 +145,7 @@ impl Topic {
     }
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize, Deserialize, Serialize)]
 pub struct TopicSet {
     pub id: String,
     pub title: String,

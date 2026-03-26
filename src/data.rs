@@ -42,6 +42,8 @@ impl Data {
     const LAST_PLAYED_KEY: &'static str = "last-played";
 
     const SIZE_SUFFIX: &'static str = "size";
+    const DB_VERSION_KEY: &'static str = "db-version";
+    const CURRENT_DB_VERSION: u32 = 1;
 
     const START_RATING: u32 = 15000;
     const MAX_BAN_LIST: usize = 50;
@@ -52,8 +54,37 @@ impl Data {
             db: sled::open(db).unwrap(),
             sets: Arc::new(RwLock::new(HashMap::new())),
         };
+        res.migrate();
         res.load_sets();
         res
+    }
+
+    fn migrate(&self) {
+        let version: u32 = self.get(&Self::DB_VERSION_KEY.to_string()).unwrap_or(0);
+        if version < 1 {
+            log::info!("Migrating DB from version {} to 1: dropping sets", version);
+            let keys: Vec<_> = self
+                .db
+                .scan_prefix(Self::SETS_KEY)
+                .filter_map(|r| r.ok().map(|(k, _)| k))
+                .collect();
+            for key in keys {
+                self.db.remove(key).unwrap();
+            }
+            // Clear active/was-active lists
+            let active_ids = self.get_active_set_ids();
+            for id in &active_ids {
+                self.remove_element(&Self::ACTIVE_SETS_KEY.to_string(), id);
+            }
+            let was_active_ids = self.get_was_active_set_ids();
+            for id in &was_active_ids {
+                self.remove_element(&Self::WAS_ACTIVE_SETS_KEY.to_string(), id);
+            }
+        }
+        if version < Self::CURRENT_DB_VERSION {
+            self.insert(&Self::DB_VERSION_KEY.to_string(), &Self::CURRENT_DB_VERSION);
+            log::info!("DB migrated to version {}", Self::CURRENT_DB_VERSION);
+        }
     }
 
     pub fn wipe(&self) {
@@ -752,6 +783,26 @@ fn main() {
         at += 1;
         log::info!("User processed {}/{}", at, player_count);
     }
+}
+
+#[test]
+fn extract_sets() {
+    let db = sled::open("svoyak.db").unwrap();
+    std::fs::create_dir_all("extracted_sets_orig").unwrap();
+    let mut count = 0;
+    for item in db.scan_prefix("sets") {
+        match item {
+            Ok((_, value)) => {
+                let set = crate::topic::TopicSet::deserialize(&mut value.as_ref()).unwrap();
+                let json = serde_json::to_string_pretty(&set).unwrap();
+                std::fs::write(format!("extracted_sets_orig/{}.json", set.id), &json).unwrap();
+                println!("{}: {} topics - {}", set.id, set.topics.len(), set.title);
+                count += 1;
+            }
+            Err(e) => panic!("DB error: {}", e),
+        }
+    }
+    println!("\nExtracted {} sets", count);
 }
 
 #[cfg(test)]

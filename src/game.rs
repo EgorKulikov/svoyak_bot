@@ -271,7 +271,7 @@ impl GameHandle {
             if restart_timer {
                 let total_words = self.current_question().word_count();
                 let text = if words_shown >= total_words {
-                    self.question_text()
+                    format!("{} 🔚", self.question_text())
                 } else {
                     self.partial_question_text(words_shown)
                 };
@@ -502,8 +502,16 @@ impl GameHandle {
                         {
                             self.game.game_state =
                                 GameState::Answer(message_id, answers, *from, words_shown);
-                            self.send_message(format!("Ваш ответ, {}?", self.user_name(from)))
-                                .await;
+                            let form_prefix = match &self.current_question().form {
+                                Some(form) => format!("<b>Форма:</b> {}\n", form),
+                                None => String::new(),
+                            };
+                            self.send_message(format!(
+                                "{}Ваш ответ, {}?",
+                                form_prefix,
+                                self.user_name(from)
+                            ))
+                            .await;
                             self.schedule_timeout(Self::ANSWER);
                         }
                     }
@@ -781,17 +789,12 @@ impl GameHandle {
                         self.game.game_state =
                             GameState::Question(message_id, answers, new_words);
                         let text = if new_words >= total_words {
-                            self.question_text()
+                            format!("{} 🔚", self.question_text())
                         } else {
                             self.partial_question_text(new_words)
                         };
                         self.edit_message(&message_id, text).await;
                         if new_words >= total_words {
-                            self.play_bot.try_react(
-                                ChatId::new(self.game.chat_id),
-                                MessageId::new(message_id),
-                                "👌",
-                            );
                             self.schedule_timeout(Self::FULL_QUESTION_THINKING);
                         } else {
                             self.schedule_timeout(Self::TICK_DURATION);
